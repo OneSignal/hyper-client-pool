@@ -3,6 +3,7 @@ name = "httpool"
 version = "0.1.0"
 authors = ["Joe Wilm <joe@jwilm.com>"]
 description = "Pooled Hyper Async Clients"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 log = "0.3"
