@@ -1,0 +1,15 @@
+[package]
+name = "httpool"
+version = "0.1.0"
+authors = ["Joe Wilm <joe@jwilm.com>"]
+description = "Pooled Hyper Async Clients"
+
+[dependencies]
+log = "0.3"
+
+[dependencies.hyper]
+git = "https://github.com/hyperium/hyper.git"
+rev = "8c6e6f51abb0dd02123b8bfafa9277850623b810"
+
+[dev-dependencies]
+env_logger = "0.3"
