@@ -1,5 +1,5 @@
 [package]
-name = "httpool"
+name = "hyper-client-pool"
 version = "0.1.0"
 authors = ["Joe Wilm <joe@jwilm.com>"]
 description = "Pooled Hyper Async Clients"
