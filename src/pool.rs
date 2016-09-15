@@ -155,16 +155,16 @@ pub struct Pool<D: Deliverable> {
 
 pub struct Config {
     /// How long to keep a connection alive before timing out
-    keep_alive_timeout: Duration,
+    pub keep_alive_timeout: Duration,
 
     /// Connection timeout (in seconds)
-    connection_timeout: Duration,
+    pub connection_timeout: Duration,
 
     /// Maximum sockets per worker
-    max_sockets: usize,
+    pub max_sockets: usize,
 
     /// Number of workers in the pool
-    workers: usize,
+    pub workers: usize,
 }
 
 impl Default for Config {
