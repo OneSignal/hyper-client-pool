@@ -1,7 +1,7 @@
 #![feature(arc_counts)]
 #![feature(reflect_marker)]
 
-extern crate hyper;
+pub extern crate hyper;
 #[macro_use] extern crate log;
 
 use std::io;
