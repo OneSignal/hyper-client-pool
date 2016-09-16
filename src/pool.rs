@@ -150,6 +150,7 @@ impl<D: Deliverable> PooledTransaction<D> {
 /// form of an Error variant saying "busy; try again later".
 pub struct Pool<D: Deliverable> {
     clients: Vec<Client<D>>,
+    client_index: usize,
     _max_parallel_transactions: usize,
 }
 
@@ -244,6 +245,7 @@ impl<D: Deliverable> Pool<D> {
 
         Pool {
             clients: clients,
+            client_index: 0,
             _max_parallel_transactions: max_parallel_transactions
         }
     }
@@ -253,7 +255,7 @@ impl<D: Deliverable> Pool<D> {
     /// The request will be started immediately assuming one of the clients in
     /// this pool is not at max_sockets.
     pub fn request(
-        &self,
+        &mut self,
         url: Url,
         transaction: Transaction<D>
     ) -> Result<(), Error<D>> {
@@ -262,7 +264,11 @@ impl<D: Deliverable> Pool<D> {
         // my current justification for this approach is 1) it's easy to write,
         // and 2) results in fewer context switches, and 3) event loops are good
         // at lots of parallel activity.
-        for client in &self.clients {
+        let mut count = 0;
+        loop {
+            let client = &self.clients[self.client_index];
+            self.client_index = (self.client_index + 1) % self.clients.len();
+
             if !client.is_full() {
                 try!(client
                     .request(url, transaction)
@@ -272,6 +278,11 @@ impl<D: Deliverable> Pool<D> {
                         }).unwrap_or(Error::LostToEther)
                     }));
                 return Ok(());
+            }
+
+            count += 1;
+            if count == self.clients.len() {
+                break;
             }
         }
 
@@ -298,7 +309,7 @@ mod tests {
         let mut config = Config::default();
         config.workers = 1;
 
-        let pool = Pool::new(&mut config);
+        let mut pool = Pool::new(&mut config);
         let (tx, rx) = mpsc::channel();
 
         for _ in 0..5 {
@@ -327,7 +338,7 @@ mod tests {
         config.workers = 1;
         config.max_sockets = 1;
 
-        let pool = Pool::new(&mut config);
+        let mut pool = Pool::new(&mut config);
         let (tx, rx) = mpsc::channel();
 
         // Start first request
