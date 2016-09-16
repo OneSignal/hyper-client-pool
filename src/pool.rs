@@ -170,8 +170,8 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            keep_alive_timeout: Duration::from_secs(60),
-            connection_timeout: Duration::from_secs(10),
+            keep_alive_timeout: Duration::from_secs(300),
+            connection_timeout: Duration::from_secs(60),
             max_sockets: 10_000,
             workers: 8,
         }
