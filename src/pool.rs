@@ -6,6 +6,7 @@ use std::cmp;
 use std::sync::Arc;
 use std::fmt;
 use std::marker::Reflect;
+use std::mem;
 
 use hyper::client::{Request, Handler, Response, DefaultTransport};
 use hyper::{Next, Encoder, Decoder};
@@ -87,6 +88,10 @@ impl<D: Deliverable> Client<D> {
         }
     }
 
+    fn into_inner(self) -> hyper::Client<PooledTransaction<D>> {
+        self.inner
+    }
+
     pub fn request(
         &self,
         url: Url,
@@ -140,6 +145,7 @@ impl<D: Deliverable> PooledTransaction<D> {
         self.inner
     }
 }
+
 
 /// Pool of HTTP clients
 ///
@@ -291,18 +297,62 @@ impl<D: Deliverable> Pool<D> {
             transaction: transaction
         })
     }
+
+    /// Shutdown the pool
+    ///
+    /// Waits for all workers to be empty before stopping.
+    pub fn shutdown(&mut self) {
+        use std::thread;
+        let duration = Duration::from_millis(50);
+
+        let clients = mem::replace(&mut self.clients, Vec::new());
+        for client in clients {
+            let mut remaining = client.active_transactions();
+            while remaining != 0 {
+                debug!("Waiting for {} transactions in current client", remaining);
+
+                thread::sleep(duration);
+                remaining = client.active_transactions();
+            }
+
+            let hyper_client = client.into_inner();
+            hyper_client.close();
+        }
+    }
 }
 
 
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc;
+    use std::sync::atomic::{Ordering, AtomicUsize};
+    use std::sync::Arc;
 
     use hyper::Url;
     use hyper::method::Method;
 
     use super::{Config, Pool, Error};
-    use ::{Transaction};
+    use ::{Transaction, Deliverable, DeliveryResult};
+
+    #[derive(Clone)]
+    struct CompletionCounter(Arc<AtomicUsize>);
+
+    impl Deliverable for CompletionCounter {
+        fn complete(self, _result: DeliveryResult) {
+            self.0.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    impl CompletionCounter {
+        pub fn new() -> CompletionCounter {
+            CompletionCounter(Arc::new(AtomicUsize::new(0)))
+        }
+
+        pub fn value(&self) -> usize {
+            self.0.load(Ordering::Acquire)
+        }
+    }
+
 
     #[test]
     fn lots_of_get_single_worker() {
@@ -330,6 +380,27 @@ mod tests {
                 break;
             }
         }
+    }
+
+    #[test]
+    fn graceful_shutdown() {
+        let txn = 20;
+        let counter = CompletionCounter::new();
+
+        let mut config = Config::default();
+        config.workers = 2;
+
+        let mut pool = Pool::new(&mut config);
+
+        for _ in 0..txn {
+            pool.request(
+                Url::parse("https://www.httpbin.org").unwrap(),
+                Transaction::new(counter.clone(), Method::Get, Default::default(), None)
+            ).expect("request ok");
+        }
+
+        pool.shutdown();
+        assert_eq!(counter.value(), txn);
     }
 
     #[test]
