@@ -5,7 +5,7 @@ pub extern crate hyper;
 #[macro_use] extern crate log;
 
 use std::io;
-use std::time::Duration;
+use std::time::{Instant, Duration};
 use std::fmt;
 use std::mem;
 
@@ -26,6 +26,7 @@ pub use pool::Pool;
 pub struct Transaction<D>
     where D: Deliverable
 {
+    start_time: Option<Instant>,
     state: State,
     request_body: Option<Vec<u8>>,
     written: usize,
@@ -35,9 +36,12 @@ pub struct Transaction<D>
 }
 
 pub enum DeliveryResult {
+    Unsent,
+
     Response {
         inner: Response,
-        body: Vec<u8>
+        body: Vec<u8>,
+        duration: Duration
     },
 
     IoError {
@@ -54,10 +58,11 @@ pub enum DeliveryResult {
 impl fmt::Debug for DeliveryResult {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            DeliveryResult::Response { ref inner, ref body } => {
+            DeliveryResult::Response { ref inner, ref body, ref duration } => {
                 f.debug_struct("DeliveryResult::Response")
                     .field("inner", inner)
                     .field("body", &::std::str::from_utf8(&body[..]))
+                    .field("duration", duration)
                     .finish()
             },
             DeliveryResult::IoError { ref error, ref response } => {
@@ -72,6 +77,9 @@ impl fmt::Debug for DeliveryResult {
                     .field("response", response)
                     .finish()
             },
+            DeliveryResult::Unsent => {
+                write!(f, "DeliveryResult::Unsent")
+            }
         }
     }
 }
@@ -86,6 +94,7 @@ impl<D> Transaction<D>
         -> Transaction<D>
     {
         Transaction {
+            start_time: None,
             state: New { method: method, headers: headers },
             request_body: body,
             written: 0,
@@ -105,8 +114,10 @@ impl<D> Drop for Transaction<D>
         let response_body = mem::replace(&mut self.response_body, Vec::new());
         let deliverable = self.deliverable.take().unwrap();
 
+        let duration = self.start_time.map(|t| t.elapsed());
+
         let response = match state {
-            New { .. } | Sending => return,
+            New { .. } | Sending => DeliveryResult::Unsent,
             IoError { error } => {
                 DeliveryResult::IoError { error: error, response: response }
             },
@@ -114,7 +125,11 @@ impl<D> Drop for Transaction<D>
                 DeliveryResult::HyperError { error: error, response: response }
             },
             Receiving => {
-                DeliveryResult::Response { inner: response.unwrap(), body: response_body }
+                DeliveryResult::Response {
+                    inner: response.unwrap(),
+                    body: response_body,
+                    duration: duration.unwrap()
+                }
             },
         };
 
@@ -157,6 +172,7 @@ impl<D> Handler<DefaultTransport> for Transaction<D>
 {
     fn on_request(&mut self, req: &mut Request) -> Next {
         let state = ::std::mem::replace(&mut self.state, State::Sending);
+        self.start_time = Some(Instant::now());
         match state {
             New { method, headers } => {
 
@@ -261,8 +277,7 @@ impl<D> Handler<DefaultTransport> for Transaction<D>
 
 impl Deliverable for ::std::sync::mpsc::Sender<DeliveryResult> {
     fn complete(self, result: DeliveryResult) {
-        let _ = self.send(result)
-            .map_err(|e| println!("failed to emit DeliveryResult {:?}", e.0));
+        let _ = self.send(result);
     }
 }
 
