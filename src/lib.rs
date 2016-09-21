@@ -326,42 +326,58 @@ mod tests {
     fn keep_alive_sockets_are_replaced() {
         let _ = env_logger::init();
 
+        let concurrent = 10;
+
         let (tx, rx) = mpsc::channel();
         let client = Client::<Transaction<mpsc::Sender<DeliveryResult>>>::configure()
             .keep_alive(true)
             .keep_alive_timeout(Some(Duration::from_secs(300)))
-            .max_sockets(2)
+            .max_sockets(concurrent + 1)
             .connect_timeout(Duration::from_secs(10))
             .build()
             .unwrap();
 
-        // Process one request on httpbin
-        let url = Url::parse("https://www.httpbin.org").unwrap();
-        let transaction = Transaction::new(
-            tx.clone(),
-            Method::Get,
-            Headers::default(),
-            None);
+        for _ in 0..100 {
+            // Process requests on httpbin
+            for _ in 0..concurrent {
+                let url = Url::parse("https://www.httpbin.org").unwrap();
+                let transaction = Transaction::new(
+                    tx.clone(),
+                    Method::Get,
+                    Headers::default(),
+                    None);
 
-        client.request(url, transaction).unwrap();
-        match rx.recv().unwrap() {
-            DeliveryResult::Response { .. } => (), // pass
-            _ => panic!("expected response")
-        }
+                client.request(url, transaction).unwrap();
+            }
 
-        // Now make a request somewhere else. Since the keep-alive is five minutes, this should mean
-        // that socket is closed and a new one opened.
-        let url = Url::parse("https://www.google.com").unwrap();
-        let transaction = Transaction::new(
-            tx,
-            Method::Get,
-            Headers::default(),
-            None);
+            // Make sure they're all done
+            for _ in 0..concurrent {
+                match rx.recv().unwrap() {
+                    DeliveryResult::Response { .. } => (), // pass
+                    _ => panic!("expected response")
+                }
+            }
 
-        client.request(url, transaction).unwrap();
-        match rx.recv().unwrap() {
-            DeliveryResult::Response { .. } => (), // pass
-            _ => panic!("expected response")
+            // Now make requests somewhere else. Since the keep-alive is five
+            // minutes, this should mean that socket is closed and a new one
+            // opened.
+            for _ in 0..concurrent {
+                let url = Url::parse("https://www.google.com").unwrap();
+                let transaction = Transaction::new(
+                    tx.clone(),
+                    Method::Get,
+                    Headers::default(),
+                    None);
+
+                client.request(url, transaction).unwrap();
+            }
+
+            for _ in 0..concurrent {
+                match rx.recv().unwrap() {
+                    DeliveryResult::Response { .. } => (), // pass
+                    _ => panic!("expected response")
+                }
+            }
         }
 
         client.close();
