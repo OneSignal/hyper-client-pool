@@ -9,8 +9,8 @@ license = "MIT OR Apache-2.0"
 log = "0.3"
 
 [dependencies.hyper]
-git = "https://github.com/hyperium/hyper.git"
-rev = "8c6e6f51abb0dd02123b8bfafa9277850623b810"
+git = "https://github.com/jwilm/hyper.git"
+rev = "27cab3766d76a613544c200eef2862fcd8481afb"
 
 [dev-dependencies]
 env_logger = "0.3"

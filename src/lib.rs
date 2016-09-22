@@ -277,7 +277,6 @@ impl<D> Handler<DefaultTransport> for Transaction<D>
 
 impl Deliverable for ::std::sync::mpsc::Sender<DeliveryResult> {
     fn complete(self, result: DeliveryResult) {
-        println!("got result: {:?}", result);
         let _ = self.send(result);
     }
 }
