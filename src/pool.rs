@@ -76,7 +76,7 @@ impl<D: Deliverable> Client<D> {
     #[inline]
     pub fn is_full(&self) -> bool {
         let active = self.active_transactions();
-        println!("active_transactions: {}, max: {}", active, self.max_parallel_transactions);
+        trace!("active_transactions: {}, max: {}", active, self.max_parallel_transactions);
         self.active_transactions() >= self.max_parallel_transactions
     }
 
