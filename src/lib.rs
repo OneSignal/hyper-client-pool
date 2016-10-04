@@ -1,6 +1,3 @@
-#![feature(arc_counts)]
-#![feature(reflect_marker)]
-
 pub extern crate hyper;
 #[macro_use] extern crate log;
 

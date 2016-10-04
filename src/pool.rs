@@ -1,14 +1,13 @@
 //! HTTP Client Worker Pool
 //!
 //! This module provides a simple API wrapping a pool of HTTP clients
-use std::time::Duration;
 use std::cmp;
-use std::sync::Arc;
-use std::fmt;
-use std::marker::Reflect;
 use std::mem;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
-use hyper::client::{Request, Handler, Response, DefaultTransport};
+use hyper::client::{Request, Handler, Response, DefaultTransport, ClientError};
 use hyper::{Next, Encoder, Decoder};
 use hyper;
 use hyper::Url;
@@ -17,8 +16,7 @@ use super::{Transaction, Deliverable};
 
 /// This is essentially an AtomicUsize that is clonable and whose count is based
 /// on the number of copies. The count is automaticaly updated on drop.
-#[derive(Clone)]
-struct Count(Arc<u8>);
+struct Count(Arc<AtomicUsize>);
 
 impl Count {
     /// Get the count
@@ -27,14 +25,28 @@ impl Count {
     /// the value is observed.
     #[inline]
     pub fn get(&self) -> usize {
-        Arc::strong_count(&self.0)
+        self.0.load(Ordering::Acquire)
     }
 
     /// Create a new RAII counter
     pub fn new() -> Count {
         // Note the value in the Arc doesn't matter since we rely on the Arc's
         // strong count to provide a value.
-        Count(Arc::new(0))
+        Count(Arc::new(AtomicUsize::new(1)))
+    }
+}
+
+impl Clone for Count {
+    fn clone(&self) -> Count {
+        let count = self.0.clone();
+        count.fetch_add(1, Ordering::AcqRel);
+        Count(count)
+    }
+}
+
+impl Drop for Count {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -96,10 +108,8 @@ impl<D: Deliverable> Client<D> {
         &self,
         url: Url,
         transaction: Transaction<D>
-    ) -> Result<(), Option<(Url, Transaction<D>)>> {
-        self.inner
-            .request(url, self.pooled(transaction))
-            .map_err(|err| err.recover().map(|(url, trans)| (url, trans.into_transaction())))
+    ) -> Result<(), ClientError<PooledTransaction<D>>> {
+        self.inner.request(url, self.pooled(transaction))
     }
 }
 
@@ -157,6 +167,7 @@ impl<D: Deliverable> PooledTransaction<D> {
 pub struct Pool<D: Deliverable> {
     clients: Vec<Client<D>>,
     client_index: usize,
+    config: Config,
     _max_parallel_transactions: usize,
 }
 
@@ -185,12 +196,10 @@ impl Default for Config {
     }
 }
 
-pub enum Error<D: Deliverable> {
+#[derive(Debug)]
+pub enum Error {
     /// The pool is processing the maximum number of transactions
-    Full {
-        url: Url,
-        transaction: Transaction<D>,
-    },
+    Full,
 
     /// It seems that hyper client error won't always return the stuff passed
     /// into it. Not sure what this means, but we don't have the transaction and
@@ -198,33 +207,20 @@ pub enum Error<D: Deliverable> {
     LostToEther
 }
 
-impl<D: Deliverable> fmt::Debug for Error<D> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            Error::Full { .. } => {
-                write!(f, "Full {{ .. }}")
-            },
-            Error::LostToEther => {
-                f.debug_struct("LostToEther").finish()
-            }
-        }
-    }
-}
-
-impl<D: Deliverable + Reflect> ::std::error::Error for Error<D> {
+impl ::std::error::Error for Error {
     fn cause(&self) -> Option<&::std::error::Error> {
         None
     }
 
     fn description(&self) -> &str {
         match *self {
-            Error::Full { .. } => "client pool at max capacity",
+            Error::Full => "client pool at max capacity",
             Error::LostToEther => "passed to hyper client but something bad happened",
         }
     }
 }
 
-impl<D: Deliverable + Reflect> ::std::fmt::Display for Error<D> {
+impl ::std::fmt::Display for Error {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         write!(f, "{}", ::std::error::Error::description(self))
     }
@@ -232,7 +228,7 @@ impl<D: Deliverable + Reflect> ::std::fmt::Display for Error<D> {
 
 impl<D: Deliverable> Pool<D> {
     /// Creat a new pool according to config
-    pub fn new(config: &mut Config) -> Pool<D> {
+    pub fn new(mut config: Config) -> Pool<D> {
         // Make sure config.workers is a reasonable value
         let num_workers = cmp::max(1, config.workers);
         config.workers = num_workers;
@@ -252,6 +248,7 @@ impl<D: Deliverable> Pool<D> {
         Pool {
             clients: clients,
             client_index: 0,
+            config: config,
             _max_parallel_transactions: max_parallel_transactions
         }
     }
@@ -264,26 +261,59 @@ impl<D: Deliverable> Pool<D> {
         &mut self,
         url: Url,
         transaction: Transaction<D>
-    ) -> Result<(), Error<D>> {
-        // This strategy will favor clients earlier in the list over clients
-        // later in the list.  There's pros/cons to this vs load balancing, but
-        // my current justification for this approach is 1) it's easy to write,
-        // and 2) results in fewer context switches, and 3) event loops are good
-        // at lots of parallel activity.
+    ) -> Result<(), Error> {
+        // Round robin requests to clients. This assumes a busy server where most clients will have
+        // a decent amount of work and will actually benefit from distributing requests.
         let mut count = 0;
         loop {
-            let client = &self.clients[self.client_index];
             self.client_index = (self.client_index + 1) % self.clients.len();
+            let index = self.client_index;
 
-            if !client.is_full() {
-                try!(client
-                    .request(url, transaction)
-                    .map_err(|err| {
-                        err.map(|(url, transaction)| {
-                            Error::Full { url: url, transaction: transaction }
-                        }).unwrap_or(Error::LostToEther)
-                    }));
-                return Ok(());
+            {
+                let client = &mut self.clients[index];
+
+                if !client.is_full() {
+                    match client.request(url, transaction) {
+                        Err(ClientError::Disconnected { url, handler: pooled }) => {
+                            // Client disconnected; create a new one to replace it
+                            warn!("hyper::Client disconnected unexpectedly; \
+                                   replacing with new client");
+                            ::std::mem::replace(client, Client::new(&self.config));
+
+                            let transaction = pooled.into_transaction();
+
+                            // Try and start the request again. Just give up if it still doesn't
+                            // work
+                            match client.request(url, transaction) {
+                                Err(_err) => {
+                                    warn!("new client was unable to service single request");
+                                    return Err(Error::LostToEther);
+                                },
+                                Ok(()) => return Ok(()),
+                            }
+                        },
+                        Err(ClientError::ShutdownDisconnection) => {
+                            // this should be unreachable
+                            warn!("hyper client pool got ShutdownDisconnection");
+                            return Err(Error::LostToEther);
+                        },
+                        Err(ClientError::EventLoopFull) => {
+                            // rotor eats these errors. typing this out makes me realize how leaky
+                            // this abstraction currently is.
+                            return Err(Error::LostToEther);
+                        },
+                        Err(ClientError::EventLoopClosed) => {
+                            warn!("hyper::Client event loop closed; replacing with new client");
+                            ::std::mem::replace(client, Client::new(&self.config));
+                            return Err(Error::LostToEther);
+                        },
+                        Err(ClientError::EventLoopIo) => {
+                            error!("hyper::Client io::Error when notifying event loop");
+                            return Err(Error::LostToEther);
+                        },
+                        Ok(_) => return Ok(()),
+                    }
+                }
             }
 
             count += 1;
@@ -292,10 +322,7 @@ impl<D: Deliverable> Pool<D> {
             }
         }
 
-        Err(Error::Full {
-            url: url,
-            transaction: transaction
-        })
+        Err(Error::Full)
     }
 
     /// Shutdown the pool
@@ -359,7 +386,7 @@ mod tests {
         let mut config = Config::default();
         config.workers = 1;
 
-        let mut pool = Pool::new(&mut config);
+        let mut pool = Pool::new(config);
         let (tx, rx) = mpsc::channel();
 
         for _ in 0..5 {
@@ -390,7 +417,7 @@ mod tests {
         let mut config = Config::default();
         config.workers = 2;
 
-        let mut pool = Pool::new(&mut config);
+        let mut pool = Pool::new(config);
 
         for _ in 0..txn {
             pool.request(
@@ -409,7 +436,7 @@ mod tests {
         config.workers = 1;
         config.max_sockets = 1;
 
-        let mut pool = Pool::new(&mut config);
+        let mut pool = Pool::new(config);
         let (tx, rx) = mpsc::channel();
 
         // Start first request

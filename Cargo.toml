@@ -10,7 +10,7 @@ log = "0.3"
 
 [dependencies.hyper]
 git = "https://github.com/jwilm/hyper.git"
-rev = "27cab3766d76a613544c200eef2862fcd8481afb"
+rev = "107ac0e3e1b869f6346f9088f1bc8ebb0b31ef1d"
 
 [dev-dependencies]
 env_logger = "0.3"
