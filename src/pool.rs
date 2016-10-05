@@ -1,7 +1,9 @@
 //! HTTP Client Worker Pool
 //!
 //! This module provides a simple API wrapping a pool of HTTP clients
+use std::any::Any;
 use std::cmp;
+use std::fmt;
 use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -196,10 +198,12 @@ impl Default for Config {
     }
 }
 
-#[derive(Debug)]
-pub enum Error {
+pub enum Error<D: Deliverable> {
     /// The pool is processing the maximum number of transactions
-    Full,
+    Full {
+        url: Url,
+        transaction: Transaction<D>,
+    },
 
     /// It seems that hyper client error won't always return the stuff passed
     /// into it. Not sure what this means, but we don't have the transaction and
@@ -207,20 +211,33 @@ pub enum Error {
     LostToEther
 }
 
-impl ::std::error::Error for Error {
+impl<D: Deliverable> fmt::Debug for Error<D> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Error::Full { .. } => {
+                write!(f, "Full {{ .. }}")
+            },
+            Error::LostToEther => {
+                f.debug_struct("LostToEther").finish()
+            }
+        }
+    }
+}
+
+impl<D: Deliverable + Any> ::std::error::Error for Error<D> {
     fn cause(&self) -> Option<&::std::error::Error> {
         None
     }
 
     fn description(&self) -> &str {
         match *self {
-            Error::Full => "client pool at max capacity",
+            Error::Full { .. } => "client pool at max capacity",
             Error::LostToEther => "passed to hyper client but something bad happened",
         }
     }
 }
 
-impl ::std::fmt::Display for Error {
+impl<D: Deliverable + Any> ::std::fmt::Display for Error<D> {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         write!(f, "{}", ::std::error::Error::description(self))
     }
@@ -261,7 +278,7 @@ impl<D: Deliverable> Pool<D> {
         &mut self,
         url: Url,
         transaction: Transaction<D>
-    ) -> Result<(), Error> {
+    ) -> Result<(), Error<D>> {
         // Round robin requests to clients. This assumes a busy server where most clients will have
         // a decent amount of work and will actually benefit from distributing requests.
         let mut count = 0;
@@ -322,7 +339,10 @@ impl<D: Deliverable> Pool<D> {
             }
         }
 
-        Err(Error::Full)
+        Err(Error::Full {
+            url: url,
+            transaction: transaction
+        })
     }
 
     /// Shutdown the pool
