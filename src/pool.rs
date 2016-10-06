@@ -78,7 +78,7 @@ impl<D: Deliverable> Client<D> {
         Client {
             inner: hyper_client,
             transactions: Count::new(),
-            max_parallel_transactions: config.max_sockets,
+            max_parallel_transactions: config.max_transactions(),
         }
     }
 
@@ -170,7 +170,6 @@ pub struct Pool<D: Deliverable> {
     clients: Vec<Client<D>>,
     client_index: usize,
     config: Config,
-    _max_parallel_transactions: usize,
 }
 
 pub struct Config {
@@ -183,8 +182,41 @@ pub struct Config {
     /// Maximum sockets per worker
     pub max_sockets: usize,
 
+    /// Maximum concurrent transactions
+    ///
+    /// This warrants some explanation since it might be assumed to always be
+    /// the same as max sockets. Indeed, if not specified, it will have the
+    /// value of max_sockets. This can be useful to provide a buffer of socket
+    /// space when using keep alive so that transactions on a new domain won't
+    /// necessarily cause keep-alive sockets to be closed. Let's just use an
+    /// example.
+    ///
+    /// Say there's 100 max sockets and 50 max transactions. Now let's say 50
+    /// transactions are started at once to google.com, and keep-alive is being
+    /// used. Now, there's 50 sockets in use.  Those transactions finish, and 50
+    /// requests are made to apple.com. If max_sockets matched max_transactions,
+    /// all of those sockets in keep-alive would be closed and reopened for the
+    /// new host. By making max_sockets larger than max_transactions, there's
+    /// extra space available for stuff in keep-alive to prevent rapid
+    /// disconnecting and reconnecting.
+    ///
+    /// Would be nice to have a more succinct explanation for this.
+    pub max_transactions: Option<usize>,
+
     /// Number of workers in the pool
     pub workers: usize,
+}
+
+impl Config {
+    /// Get the maximum number of transactions
+    ///
+    /// If this value is larger than max_sockets, the max_sockets value is
+    /// returned.
+    pub fn max_transactions(&self) -> usize {
+        self.max_transactions
+            .map(|trans| cmp::min(trans, self.max_sockets))
+            .unwrap_or(self.max_sockets)
+    }
 }
 
 impl Default for Config {
@@ -192,8 +224,9 @@ impl Default for Config {
         Config {
             keep_alive_timeout: Duration::from_secs(300),
             connection_timeout: Duration::from_secs(60),
-            max_sockets: 10_000,
-            workers: 8,
+            max_sockets: 1_000,
+            max_transactions: None,
+            workers: 2,
         }
     }
 }
@@ -254,10 +287,6 @@ impl<D: Deliverable> Pool<D> {
         let max_sockets = cmp::max(1, config.max_sockets);
         config.max_sockets = max_sockets;
 
-        // Maximum number of active transactions would be using each socket on
-        // each worker.
-        let max_parallel_transactions = max_sockets * num_workers;
-
         let clients = (0..num_workers)
             .map(|_| Client::new(&config))
             .collect();
@@ -266,7 +295,6 @@ impl<D: Deliverable> Pool<D> {
             clients: clients,
             client_index: 0,
             config: config,
-            _max_parallel_transactions: max_parallel_transactions
         }
     }
 
