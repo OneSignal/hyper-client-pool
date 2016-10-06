@@ -72,6 +72,7 @@ impl<D: Deliverable> Client<D> {
             .keep_alive_timeout(Some(config.keep_alive_timeout))
             .max_sockets(config.max_sockets + 100)
             .connect_timeout(config.connection_timeout)
+            .dns_workers(config.dns_threads_per_worker)
             .build()
             .unwrap(); // TODO
 
@@ -205,6 +206,9 @@ pub struct Config {
 
     /// Number of workers in the pool
     pub workers: usize,
+
+    /// Number of DNS threads per worker
+    pub dns_threads_per_worker: usize,
 }
 
 impl Config {
@@ -223,10 +227,11 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             keep_alive_timeout: Duration::from_secs(300),
-            connection_timeout: Duration::from_secs(60),
+            connection_timeout: Duration::from_secs(10),
             max_sockets: 1_000,
             max_transactions: None,
             workers: 2,
+            dns_threads_per_worker: 10,
         }
     }
 }
