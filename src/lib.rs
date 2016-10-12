@@ -108,6 +108,10 @@ impl<D> Transaction<D>
             deliverable: Some(deliverable)
         }
     }
+
+    pub fn start_time(&self) -> Instant {
+        self.start_time
+    }
 }
 
 impl<D> Drop for Transaction<D>
