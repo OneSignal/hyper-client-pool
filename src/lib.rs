@@ -23,7 +23,7 @@ pub use pool::Pool;
 pub struct Transaction<D>
     where D: Deliverable
 {
-    start_time: Option<Instant>,
+    start_time: Instant,
     state: State,
     request_body: Option<Vec<u8>>,
     written: usize,
@@ -44,11 +44,13 @@ pub enum DeliveryResult {
     IoError {
         error: io::Error,
         response: Option<Response>,
+        duration: Duration,
     },
 
     HyperError {
         error: hyper::Error,
         response: Option<Response>,
+        duration: Duration,
     }
 }
 
@@ -62,16 +64,18 @@ impl fmt::Debug for DeliveryResult {
                     .field("duration", duration)
                     .finish()
             },
-            DeliveryResult::IoError { ref error, ref response } => {
+            DeliveryResult::IoError { ref error, ref response, ref duration } => {
                 f.debug_struct("DeliveryResult::IoError")
                     .field("error", error)
                     .field("response", response)
+                    .field("duration", duration)
                     .finish()
             },
-            DeliveryResult::HyperError { ref error, ref response } => {
+            DeliveryResult::HyperError { ref error, ref response, ref duration } => {
                 f.debug_struct("DeliveryResult::HyperError")
                     .field("error", error)
                     .field("response", response)
+                    .field("duration", duration)
                     .finish()
             },
             DeliveryResult::Unsent => {
@@ -91,7 +95,7 @@ impl<D> Transaction<D>
         -> Transaction<D>
     {
         Transaction {
-            start_time: None,
+            start_time: Instant::now(),
             state: New { method: method, headers: headers },
             request_body: body,
             written: 0,
@@ -111,21 +115,29 @@ impl<D> Drop for Transaction<D>
         let response_body = mem::replace(&mut self.response_body, Vec::new());
         let deliverable = self.deliverable.take().unwrap();
 
-        let duration = self.start_time.map(|t| t.elapsed());
+        let duration = self.start_time.elapsed();
 
         let response = match state {
             New { .. } | Sending => DeliveryResult::Unsent,
             IoError { error } => {
-                DeliveryResult::IoError { error: error, response: response }
+                DeliveryResult::IoError {
+                    error: error,
+                    response: response,
+                    duration: duration,
+                }
             },
             HyperError { error } => {
-                DeliveryResult::HyperError { error: error, response: response }
+                DeliveryResult::HyperError {
+                    error: error,
+                    response: response,
+                    duration: duration,
+                }
             },
             Receiving => {
                 DeliveryResult::Response {
                     inner: response.unwrap(),
                     body: response_body,
-                    duration: duration.unwrap()
+                    duration: duration
                 }
             },
         };
@@ -169,7 +181,6 @@ impl<D> Handler<DefaultTransport> for Transaction<D>
 {
     fn on_request(&mut self, req: &mut Request) -> Next {
         let state = ::std::mem::replace(&mut self.state, State::Sending);
-        self.start_time = Some(Instant::now());
         match state {
             New { method, headers } => {
 
