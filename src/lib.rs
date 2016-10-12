@@ -184,6 +184,11 @@ fn read() -> Next {
     Next::read().timeout(Duration::from_secs(10))
 }
 
+#[inline]
+fn write() -> Next {
+    Next::write().timeout(Duration::from_secs(10))
+}
+
 impl<D> Handler<DefaultTransport> for Transaction<D>
     where D: Deliverable,
 {
@@ -210,13 +215,13 @@ impl<D> Handler<DefaultTransport> for Transaction<D>
 
                 // Request write interest if there's a request body.
                 if self.request_body.is_some() {
-                    Next::write()
+                    write()
                 } else {
                     read()
                 }
             },
-            Sending => Next::write(),
-            _ => Next::read(),
+            Sending => write(),
+            _ => read(),
         }
     }
 
@@ -238,7 +243,7 @@ impl<D> Handler<DefaultTransport> for Transaction<D>
                 }
 
                 if self.written != body.len() {
-                    return Next::write();
+                    return write();
                 }
             },
             _ => ()
