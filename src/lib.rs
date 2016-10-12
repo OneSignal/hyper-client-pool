@@ -33,7 +33,9 @@ pub struct Transaction<D>
 }
 
 pub enum DeliveryResult {
-    Unsent,
+    Unsent {
+        duration: Duration,
+    },
 
     Response {
         inner: Response,
@@ -78,8 +80,10 @@ impl fmt::Debug for DeliveryResult {
                     .field("duration", duration)
                     .finish()
             },
-            DeliveryResult::Unsent => {
-                write!(f, "DeliveryResult::Unsent")
+            DeliveryResult::Unsent { ref duration } => {
+                f.debug_struct("DeliveryResult::Unsent")
+                    .field("duration", duration)
+                    .finish()
             }
         }
     }
@@ -118,7 +122,7 @@ impl<D> Drop for Transaction<D>
         let duration = self.start_time.elapsed();
 
         let response = match state {
-            New { .. } | Sending => DeliveryResult::Unsent,
+            New { .. } | Sending => DeliveryResult::Unsent { duration: duration },
             IoError { error } => {
                 DeliveryResult::IoError {
                     error: error,
