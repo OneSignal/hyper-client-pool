@@ -232,7 +232,7 @@ impl<D> Handler<DefaultTransport> for Transaction<D>
                         _ => {
                             // Unrecoverable?
                             self.state = IoError { error: err };
-                            return Next::end()
+                            return Next::remove()
                         }
                     }
                 }
@@ -278,7 +278,7 @@ impl<D> Handler<DefaultTransport> for Transaction<D>
                     },
                     _ => {
                         self.state = IoError { error: err };
-                        return Next::end()
+                        return Next::remove()
                     }
                 }
             }
