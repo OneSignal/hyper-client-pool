@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 log = "0.3"
 
 [dependencies.hyper]
-git = "https://github.com/DarrenTsung/hyper.git"
+git = "https://github.com/jwilm/hyper.git"
 branch = "better-errors"
 
 [dev-dependencies]

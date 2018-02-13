@@ -1,15 +1,15 @@
 pub extern crate hyper;
 #[macro_use] extern crate log;
 
-use std::io;
-use std::time::{Instant, Duration};
 use std::fmt;
+use std::io;
 use std::mem;
+use std::time::{Instant, Duration};
 
-use hyper::client::{Request, Handler, Response, DefaultTransport};
 use hyper::{Next, Encoder, Decoder};
-use hyper::method::Method;
+use hyper::client::{Request, Handler, Response, DefaultTransport};
 use hyper::Headers;
+use hyper::method::Method;
 
 pub mod pool;
 
@@ -306,12 +306,12 @@ impl Deliverable for ::std::sync::mpsc::Sender<DeliveryResult> {
 mod tests {
     extern crate env_logger;
 
-    use std::time::Duration;
     use std::sync::mpsc;
+    use std::time::Duration;
 
+    use hyper::{Headers, Url};
     use hyper::client::Client;
     use hyper::method::Method;
-    use hyper::{Headers, Url};
 
     use super::{DeliveryResult, Transaction};
 
@@ -339,7 +339,12 @@ mod tests {
 
         client.request(url, transaction).unwrap();
 
-        rx.recv().unwrap();
+        let delivery_result = rx.recv().unwrap();
+        match delivery_result {
+            DeliveryResult::Response { .. } => (), // ok
+            _ => panic!("Delivery result is not as expected: {:?}", delivery_result),
+        }
+
         client.close();
     }
 
@@ -373,7 +378,11 @@ mod tests {
 
             // Make sure they're all done
             for _ in 0..concurrent {
-                rx.recv().unwrap();
+                let delivery_result = rx.recv().unwrap();
+                match delivery_result {
+                    DeliveryResult::Response { .. } => (), // ok
+                    _ => panic!("Delivery result is not as expected: {:?}", delivery_result),
+                }
             }
 
             // Now make requests somewhere else. Since the keep-alive is five
@@ -391,7 +400,11 @@ mod tests {
             }
 
             for _ in 0..concurrent {
-                rx.recv().unwrap();
+                let delivery_result = rx.recv().unwrap();
+                match delivery_result {
+                    DeliveryResult::Response { .. } => (), // ok
+                    _ => panic!("Delivery result is not as expected: {:?}", delivery_result),
+                }
             }
         }
 
