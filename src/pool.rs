@@ -9,9 +9,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use hyper::client::{Request, Handler, Response, DefaultTransport, ClientError};
-use hyper::{Next, Encoder, Decoder};
 use hyper;
+use hyper::{Next, Encoder, Decoder};
+use hyper::client::{Request, Handler, Response, DefaultTransport, ClientError};
 use hyper::Url;
 
 use super::{Transaction, Deliverable};
@@ -405,14 +405,14 @@ impl<D: Deliverable> Pool<D> {
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc;
-    use std::sync::atomic::{Ordering, AtomicUsize};
     use std::sync::Arc;
+    use std::sync::atomic::{Ordering, AtomicUsize};
 
-    use hyper::Url;
     use hyper::method::Method;
+    use hyper::Url;
 
-    use super::{Config, Pool, Error};
     use ::{Transaction, Deliverable, DeliveryResult};
+    use super::{Config, Pool, Error};
 
     #[derive(Clone)]
     struct CompletionCounter(Arc<AtomicUsize>);
