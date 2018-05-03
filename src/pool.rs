@@ -5,160 +5,13 @@ use std::any::Any;
 use std::cmp;
 use std::fmt;
 use std::mem;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread;
 use std::time::Duration;
 
-use hyper;
-use hyper::{Next, Encoder, Decoder};
-use hyper::client::{Request, Handler, Response, DefaultTransport, ClientError};
-use hyper::Url;
+use hyper::Client;
 
-use super::{Transaction, Deliverable};
-
-/// This is essentially an AtomicUsize that is clonable and whose count is based
-/// on the number of copies. The count is automaticaly updated on drop.
-struct Count(Arc<AtomicUsize>);
-
-impl Count {
-    /// Get the count
-    ///
-    /// This method is inherently racey. Assume the count will have changed once
-    /// the value is observed.
-    #[inline]
-    pub fn get(&self) -> usize {
-        self.0.load(Ordering::Acquire)
-    }
-
-    /// Create a new RAII counter
-    pub fn new() -> Count {
-        // Note the value in the Arc doesn't matter since we rely on the Arc's
-        // strong count to provide a value.
-        Count(Arc::new(AtomicUsize::new(1)))
-    }
-}
-
-impl Clone for Count {
-    fn clone(&self) -> Count {
-        let count = self.0.clone();
-        count.fetch_add(1, Ordering::AcqRel);
-        Count(count)
-    }
-}
-
-impl Drop for Count {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::AcqRel);
-    }
-}
-
-/// Wraps a hyper client with additional information/APIs like active transaction count
-struct Client<D: Deliverable> {
-    /// Number of transactions running on this client
-    transactions: Count,
-
-    /// The hyper client being wrapped
-    inner: hyper::Client<PooledTransaction<D>>,
-
-    /// Maximum active transactions,
-    max_parallel_transactions: usize,
-}
-
-impl<D: Deliverable> Client<D> {
-    /// Create a new client
-    pub fn new(config: &Config) -> Client<D> {
-        let hyper_client = hyper::Client::<PooledTransaction<D>>::configure()
-            .keep_alive(true)
-            .keep_alive_timeout(Some(config.keep_alive_timeout))
-            .max_sockets(config.max_sockets + 100)
-            .connect_timeout(config.connection_timeout)
-            .dns_workers(config.dns_threads_per_worker)
-            .build()
-            .unwrap(); // TODO
-
-        Client {
-            inner: hyper_client,
-            transactions: Count::new(),
-            max_parallel_transactions: config.max_transactions(),
-        }
-    }
-
-    #[inline]
-    pub fn active_transactions(&self) -> usize {
-        self.transactions.get() - 1
-    }
-
-    #[inline]
-    pub fn is_full(&self) -> bool {
-        let active = self.active_transactions();
-        trace!("active_transactions: {}, max: {}", active, self.max_parallel_transactions);
-        self.active_transactions() >= self.max_parallel_transactions
-    }
-
-    #[inline]
-    fn pooled(&self, transaction: Transaction<D>) -> PooledTransaction<D> {
-        PooledTransaction {
-            inner: transaction,
-            _count: self.transactions.clone(),
-        }
-    }
-
-    fn into_inner(self) -> hyper::Client<PooledTransaction<D>> {
-        self.inner
-    }
-
-    pub fn request(
-        &self,
-        url: Url,
-        transaction: Transaction<D>
-    ) -> Result<(), ClientError<PooledTransaction<D>>> {
-        self.inner.request(url, self.pooled(transaction))
-    }
-}
-
-/// Wrapper for transaction data
-///
-/// Used as an RAII tracker for connection count per client
-struct PooledTransaction<D: Deliverable> {
-    inner: Transaction<D>,
-
-    /// Number of active connections on current client
-    _count: Count,
-}
-
-impl<D: Deliverable> Handler<DefaultTransport> for PooledTransaction<D> {
-    #[inline]
-    fn on_request(&mut self, req: &mut Request) -> Next {
-        self.inner.on_request(req)
-    }
-
-    #[inline]
-    fn on_request_writable(&mut self, encoder: &mut Encoder<DefaultTransport>) -> Next {
-        self.inner.on_request_writable(encoder)
-    }
-
-    #[inline]
-    fn on_response(&mut self, res: Response) -> Next {
-        self.inner.on_response(res)
-    }
-
-    #[inline]
-    fn on_response_readable(&mut self, decoder: &mut Decoder<DefaultTransport>) -> Next {
-        self.inner.on_response_readable(decoder)
-    }
-
-    #[inline]
-    fn on_error(&mut self, err: hyper::Error) -> Next {
-        self.inner.on_error(err)
-    }
-}
-
-impl<D: Deliverable> PooledTransaction<D> {
-    pub fn into_transaction(self) -> Transaction<D> {
-        self.inner
-    }
-}
-
+use config::Config;
+use dispatcher::Dispatcher;
 
 /// Pool of HTTP clients
 ///
@@ -167,76 +20,13 @@ impl<D: Deliverable> PooledTransaction<D> {
 /// active transactions running on each client is tracked so that max sockets
 /// may be respected. When all clients are full, backpressure is provided in the
 /// form of an Error variant saying "busy; try again later".
-pub struct Pool<D: Deliverable> {
+pub struct Pool<D: Dispatcher> {
     clients: Vec<Client<D>>,
     client_index: usize,
     config: Config,
 }
 
-pub struct Config {
-    /// How long to keep a connection alive before timing out
-    pub keep_alive_timeout: Duration,
-
-    /// Connection timeout (in seconds)
-    pub connection_timeout: Duration,
-
-    /// Maximum sockets per worker
-    pub max_sockets: usize,
-
-    /// Maximum concurrent transactions
-    ///
-    /// This warrants some explanation since it might be assumed to always be
-    /// the same as max sockets. Indeed, if not specified, it will have the
-    /// value of max_sockets. This can be useful to provide a buffer of socket
-    /// space when using keep alive so that transactions on a new domain won't
-    /// necessarily cause keep-alive sockets to be closed. Let's just use an
-    /// example.
-    ///
-    /// Say there's 100 max sockets and 50 max transactions. Now let's say 50
-    /// transactions are started at once to google.com, and keep-alive is being
-    /// used. Now, there's 50 sockets in use.  Those transactions finish, and 50
-    /// requests are made to apple.com. If max_sockets matched max_transactions,
-    /// all of those sockets in keep-alive would be closed and reopened for the
-    /// new host. By making max_sockets larger than max_transactions, there's
-    /// extra space available for stuff in keep-alive to prevent rapid
-    /// disconnecting and reconnecting.
-    ///
-    /// Would be nice to have a more succinct explanation for this.
-    pub max_transactions: Option<usize>,
-
-    /// Number of workers in the pool
-    pub workers: usize,
-
-    /// Number of DNS threads per worker
-    pub dns_threads_per_worker: usize,
-}
-
-impl Config {
-    /// Get the maximum number of transactions
-    ///
-    /// If this value is larger than max_sockets, the max_sockets value is
-    /// returned.
-    pub fn max_transactions(&self) -> usize {
-        self.max_transactions
-            .map(|trans| cmp::min(trans, self.max_sockets))
-            .unwrap_or(self.max_sockets)
-    }
-}
-
-impl Default for Config {
-    fn default() -> Config {
-        Config {
-            keep_alive_timeout: Duration::from_secs(300),
-            connection_timeout: Duration::from_secs(10),
-            max_sockets: 1_000,
-            max_transactions: None,
-            workers: 2,
-            dns_threads_per_worker: 10,
-        }
-    }
-}
-
-pub enum Error<D: Deliverable> {
+pub enum Error<D: Dispatcher> {
     /// The pool is processing the maximum number of transactions
     Full {
         url: Url,
@@ -249,7 +39,7 @@ pub enum Error<D: Deliverable> {
     LostToEther
 }
 
-impl<D: Deliverable> fmt::Debug for Error<D> {
+impl<D: Dispatcher> fmt::Debug for Error<D> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Error::Full { .. } => {
@@ -262,7 +52,7 @@ impl<D: Deliverable> fmt::Debug for Error<D> {
     }
 }
 
-impl<D: Deliverable + Any> ::std::error::Error for Error<D> {
+impl<D: Dispatcher + Any> ::std::error::Error for Error<D> {
     fn cause(&self) -> Option<&::std::error::Error> {
         None
     }
@@ -275,13 +65,13 @@ impl<D: Deliverable + Any> ::std::error::Error for Error<D> {
     }
 }
 
-impl<D: Deliverable + Any> ::std::fmt::Display for Error<D> {
+impl<D: Dispatcher + Any> ::std::fmt::Display for Error<D> {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         write!(f, "{}", ::std::error::Error::description(self))
     }
 }
 
-impl<D: Deliverable> Pool<D> {
+impl<D: Dispatcher> Pool<D> {
     /// Creat a new pool according to config
     pub fn new(mut config: Config) -> Pool<D> {
         // Make sure config.workers is a reasonable value
@@ -382,7 +172,6 @@ impl<D: Deliverable> Pool<D> {
     ///
     /// Waits for all workers to be empty before stopping.
     pub fn shutdown(&mut self) {
-        use std::thread;
         let duration = Duration::from_millis(50);
 
         let clients = mem::replace(&mut self.clients, Vec::new());
@@ -408,17 +197,17 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{Ordering, AtomicUsize};
 
-    use hyper::method::Method;
+    use hyper::Method;
     use hyper::Url;
 
-    use ::{Transaction, Deliverable, DeliveryResult};
+    use ::{Transaction, Dispatcher, DeliveryResult};
     use super::{Config, Pool, Error};
 
     #[derive(Clone)]
     struct CompletionCounter(Arc<AtomicUsize>);
 
-    impl Deliverable for CompletionCounter {
-        fn complete(self, _result: DeliveryResult) {
+    impl Dispatcher for CompletionCounter {
+        fn notify(self, _result: DeliveryResult) {
             self.0.fetch_add(1, Ordering::AcqRel);
         }
     }

@@ -7,10 +7,9 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 log = "0.3"
-
-[dependencies.hyper]
-git = "https://github.com/DarrenTsung/hyper.git"
-branch = "better-errors"
+hyper = "0.11"
+futures = "0.1"
+tokio-core = "0.1"
 
 [dev-dependencies]
 env_logger = "0.3"
