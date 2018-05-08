@@ -2,69 +2,150 @@
 //!
 //! This module provides a simple API wrapping a pool of HTTP clients
 use std::io;
+use std::mem;
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use futures::{Poll, Future, Stream, Async};
 use futures::sync::mpsc as FuturesMpsc;
+use hyper_tls::{self, HttpsConnector};
+use hyper::{self, Client};
+use hyper::client::HttpConnector;
+use native_tls::TlsConnector;
 use tokio_core::reactor::{Core, Handle};
 
+use config::Config;
 use counter::Counter;
 use dispatcher::Dispatcher;
 use transaction::Transaction;
 
 /// Lives on a separate thread and runs Transactions sent by Pool
-struct Executor<D: Dispatcher> {
-    index: usize,
-    max_parallel_transactions: usize,
+pub struct Executor<D: Dispatcher> {
     handle: Handle,
-    receiver: FuturesMpsc::UnboundedReceiver<(Transaction<D>, Counter)>,
+    client: Client<HttpsConnector<HttpConnector>>,
+    transaction_counter: Counter,
+    transaction_timeout: Duration,
+    state: ExecutorState<D>,
 }
 
-struct ExecutorHandle<D: Dispatcher> {
-    /// Number of transactions running on this executor thread
-    /// Because we're holding on to a copy, this is actually 1
-    /// larger than the number of transactions
+pub struct ExecutorHandle<D: Dispatcher> {
     transaction_counter: Counter,
+    max_transactions: usize,
 
-    sender: FuturesMpsc::UnboundedSender<(Transaction<D>, Counter)>,
+    sender: FuturesMpsc::UnboundedSender<ExecutorMessage<D>>,
     join_handle: JoinHandle<()>,
 }
 
+pub enum SendError<D: Dispatcher> {
+    Full(Transaction<D>),
+    FailedSend(Transaction<D>),
+}
+
+pub enum SpawnError {
+    ThreadSpawn(io::Error),
+    HttpsConnector(hyper_tls::Error),
+}
+
+enum ExecutorState<D: Dispatcher> {
+    Running(FuturesMpsc::UnboundedReceiver<ExecutorMessage<D>>),
+    Draining,
+    Finished,
+}
+
+enum ExecutorMessage<D: Dispatcher> {
+    Transaction((Transaction<D>, Counter)),
+    Shutdown,
+}
+
+/// Number of transactions running on this executor thread
+/// Because both the ExecutorHandle and Executor are holding on to a copy,
+/// this is actually 2 larger than the number of transactions
+fn count_transactions(counter: &Counter) -> usize {
+    counter.get() - 2
+}
+
+impl<D: Dispatcher> ExecutorHandle<D> {
+    pub fn send(&mut self, transaction: Transaction<D>) -> Result<(), SendError<D>> {
+        if self.is_full() {
+            return Err(SendError::Full(transaction));
+        }
+
+        let package = ExecutorMessage::Transaction((transaction, self.transaction_counter.clone()));
+        if let Err(err) = self.sender.unbounded_send(package) {
+            match err.into_inner() {
+                ExecutorMessage::Transaction((transaction, _counter)) => {
+                    return Err(SendError::FailedSend(transaction));
+                },
+                _ => unreachable!(),
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn send_shutdown(&mut self) {
+        let _ = self.sender.unbounded_send(ExecutorMessage::Shutdown);
+    }
+
+    pub fn join(self) -> thread::Result<()> {
+        self.join_handle.join()
+    }
+
+    fn is_full(&self) -> bool {
+        count_transactions(&self.transaction_counter) >= self.max_transactions
+    }
+}
+
 impl<D: Dispatcher> Executor<D> {
-    pub fn spawn(
-        index: usize,
-        max_parallel_transactions: usize,
-    ) -> Result<ExecutorHandle<D>, io::Error> {
+    pub fn spawn(config: &Config) -> Result<ExecutorHandle<D>, SpawnError> {
         let (tx, rx) = FuturesMpsc::unbounded();
-
         let counter = Counter::new();
+        let counter_clone = counter.clone();
+        let keep_alive_timeout = config.keep_alive_timeout;
+        let dns_threads_per_worker = config.dns_threads_per_worker;
+        let transaction_timeout = config.transaction_timeout.clone();
 
-        info!("Spawning Executor({}).", index);
+        info!("Spawning Executor.");
+        let tls = TlsConnector::builder().and_then(|builder| builder.build()).map_err(SpawnError::HttpsConnector)?;
 
         thread::Builder::new()
-            .name(format!("Hyper-Client-Pool Executor ({})", index))
+            .name(format!("Hyper-Client-Pool Executor"))
             .spawn(move || {
                 let mut core = Core::new().unwrap();
+                let handle = core.handle();
+
+                let mut http = HttpConnector::new(dns_threads_per_worker, &handle);
+                http.enforce_http(false);
+                let connector = HttpsConnector::from((http, tls));
+                let client = hyper::Client::configure()
+                    .connector(connector)
+                    .keep_alive(true)
+                    .keep_alive_timeout(Some(keep_alive_timeout))
+                    .build(&handle);
+
                 let executor = Executor {
-                    index,
-                    max_parallel_transactions,
-                    receiver: rx,
-                    handle: core.handle(),
+                    state: ExecutorState::Running(rx),
+                    handle: handle,
+                    transaction_counter: counter_clone,
+                    client,
+                    transaction_timeout,
                 };
 
                 if let Err(err) = core.run(executor) {
                     warn!("Error when running Executor: {:?}", err);
                 }
 
-                info!("Executor({}) exited.", index);
+                info!("Executor exited.");
             })
             .map(|join_handle| {
                 ExecutorHandle {
                     transaction_counter: counter,
+                    max_transactions: config.max_transactions_per_worker,
                     sender: tx,
                     join_handle,
                 }
             })
+            .map_err(SpawnError::ThreadSpawn)
     }
 }
 
@@ -73,21 +154,58 @@ impl<D: Dispatcher> Future for Executor<D> {
     type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        loop {
-            match self.receiver.poll() {
-                Ok(Async::Ready(Some((transaction, counter)))) => {
-                    info!("Executor({}): spawning transaction.", self.index);
+        // If self.state is not set, then it will be finished
+        // so should only be not set if Finished
+        let state = mem::replace(&mut self.state, ExecutorState::Finished);
 
-                    transaction.spawn(self.handle, counter);
-                },
-                // No messages
-                Ok(Async::NotReady) => return Ok(Async::NotReady),
-                // All senders dropped or errored
-                // (shouldn't be possible with () error type), shutdown
-                Ok(Async::Ready(None)) | Err(()) => {
+        self.state = match state {
+            ExecutorState::Running(mut receiver) => {
+                loop {
+                    match receiver.poll() {
+                        Ok(Async::Ready(Some(msg))) => {
+                            match msg {
+                                ExecutorMessage::Transaction((transaction, counter)) => {
+                                    info!("Executor: spawning transaction.");
+
+                                    transaction.spawn_request(
+                                        &self.client,
+                                        &self.handle,
+                                        self.transaction_timeout.clone(),
+                                        counter
+                                    );
+                                },
+                                ExecutorMessage::Shutdown => {
+                                    info!("Executor: received shutdown notice, shutting down..");
+
+                                    // Not compile-time-enforced, but there is an assumption here
+                                    // that there are no other messages in the queue after shutdown
+                                    // because send_shutdown() is called immediately before
+                                    // shutdown() which consumes the handle
+                                    //
+                                    // Shutdown the Executor, transactions in flight will continue
+                                    // running until all finished
+                                    break ExecutorState::Draining;
+                                },
+                            };
+                        },
+                        // No messages
+                        Ok(Async::NotReady) => break ExecutorState::Running(receiver),
+                        // All senders dropped or errored
+                        // (shouldn't be possible with () error type), shutdown
+                        Ok(Async::Ready(None)) | Err(()) => break ExecutorState::Draining,
+                    }
+                }
+            },
+            ExecutorState::Draining => {
+                if count_transactions(&self.transaction_counter) > 0 {
+                    ExecutorState::Draining
+                } else {
                     return Ok(Async::Ready(()));
-                },
-            }
-        }
+                }
+            },
+            ExecutorState::Finished => panic!("Should not poll() after Executor is finished!"),
+        };
+
+        Ok(Async::NotReady)
     }
 }
