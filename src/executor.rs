@@ -16,11 +16,11 @@ use tokio_core::reactor::{Core, Handle};
 
 use config::Config;
 use counter::{Counter, WeakCounter};
-use dispatcher::Dispatcher;
+use deliverable::Deliverable;
 use transaction::Transaction;
 
 /// Lives on a separate thread and runs Transactions sent by Pool
-pub struct Executor<D: Dispatcher> {
+pub struct Executor<D: Deliverable> {
     handle: Handle,
     client: Client<HttpsConnector<HttpConnector>>,
     transaction_counter: WeakCounter,
@@ -28,7 +28,7 @@ pub struct Executor<D: Dispatcher> {
     state: ExecutorState<D>,
 }
 
-pub struct ExecutorHandle<D: Dispatcher> {
+pub struct ExecutorHandle<D: Deliverable> {
     transaction_counter: WeakCounter,
     max_transactions: usize,
 
@@ -36,7 +36,7 @@ pub struct ExecutorHandle<D: Dispatcher> {
     join_handle: JoinHandle<()>,
 }
 
-pub enum SendError<D: Dispatcher> {
+pub enum SendError<D: Deliverable> {
     Full(Transaction<D>),
     FailedSend(Transaction<D>),
 }
@@ -46,18 +46,18 @@ pub enum SpawnError {
     HttpsConnector(hyper_tls::Error),
 }
 
-enum ExecutorState<D: Dispatcher> {
+enum ExecutorState<D: Deliverable> {
     Running(FuturesMpsc::UnboundedReceiver<ExecutorMessage<D>>),
     Draining,
     Finished,
 }
 
-enum ExecutorMessage<D: Dispatcher> {
+enum ExecutorMessage<D: Deliverable> {
     Transaction((Transaction<D>, Counter)),
     Shutdown,
 }
 
-impl<D: Dispatcher> ExecutorHandle<D> {
+impl<D: Deliverable> ExecutorHandle<D> {
     pub fn send(&mut self, transaction: Transaction<D>) -> Result<(), SendError<D>> {
         if self.is_full() {
             return Err(SendError::Full(transaction));
@@ -86,7 +86,7 @@ impl<D: Dispatcher> ExecutorHandle<D> {
     }
 }
 
-impl<D: Dispatcher> Executor<D> {
+impl<D: Deliverable> Executor<D> {
     pub fn spawn(config: &Config) -> Result<ExecutorHandle<D>, SpawnError> {
         let (tx, rx) = FuturesMpsc::unbounded();
         let counter = Counter::new().downgrade();
@@ -139,7 +139,7 @@ impl<D: Dispatcher> Executor<D> {
     }
 }
 
-impl<D: Dispatcher> Future for Executor<D> {
+impl<D: Deliverable> Future for Executor<D> {
     type Item = ();
     type Error = ();
 

@@ -6,7 +6,7 @@ use std::cmp;
 use fpool::{ActResult, RoundRobinPool};
 
 use config::Config;
-use dispatcher::Dispatcher;
+use deliverable::Deliverable;
 use error::Error;
 use executor::{Executor, SendError, SpawnError, ExecutorHandle};
 use transaction::Transaction;
@@ -18,11 +18,11 @@ use transaction::Transaction;
 /// active transactions running on each client is tracked so that max sockets
 /// may be respected. When all clients are full, backpressure is provided in the
 /// form of an Error variant saying "busy; try again later".
-pub struct Pool<D: Dispatcher> {
+pub struct Pool<D: Deliverable> {
     executor_handles: RoundRobinPool<ExecutorHandle<D>, Error<D>>,
 }
 
-impl<D: Dispatcher> Pool<D> {
+impl<D: Deliverable> Pool<D> {
     /// Creat a new pool according to config
     pub fn new(mut config: Config) -> Result<Pool<D>, Error<D>> {
         // Make sure config.workers is a reasonable value

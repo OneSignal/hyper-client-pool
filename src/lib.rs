@@ -9,13 +9,13 @@ extern crate tokio_core;
 
 mod config;
 mod counter;
-mod dispatcher;
+mod deliverable;
 mod error;
 mod executor;
 mod pool;
 mod transaction;
 
-pub use dispatcher::Dispatcher;
+pub use deliverable::Deliverable;
 pub use transaction::{Transaction, DeliveryResult};
 pub use pool::Pool;
 pub use error::Error;
@@ -79,8 +79,8 @@ mod tests {
         }
     }
 
-    impl Dispatcher for SuccessfulCompletionCounter {
-        fn notify(&mut self, result: DeliveryResult) {
+    impl Deliverable for SuccessfulCompletionCounter {
+        fn complete(&mut self, result: DeliveryResult) {
             assert_successful_result(result);
             self.count.fetch_add(1, Ordering::AcqRel);
         }

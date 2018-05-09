@@ -10,12 +10,12 @@ use hyper::client::HttpConnector;
 use tokio_core::reactor::{Handle, Timeout};
 
 use counter::Counter;
-use dispatcher::Dispatcher;
+use deliverable::Deliverable;
 
 /// The result of the transaction, a message sent to the
-/// dispatcher.
+/// deliverable.
 ///
-/// This must be sent to the dispatcher in any case
+/// This must be sent to the deliverable in any case
 /// in order to prevent data loss.
 #[derive(Debug)]
 pub enum DeliveryResult {
@@ -39,30 +39,30 @@ pub enum DeliveryResult {
     },
 }
 
-pub struct Transaction<D: Dispatcher> {
-    dispatcher: D,
+pub struct Transaction<D: Deliverable> {
+    deliverable: D,
     request: Request,
 }
 
-impl<D: Dispatcher> fmt::Debug for Transaction<D> {
+impl<D: Deliverable> fmt::Debug for Transaction<D> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Transaction {{ dispatcher: (unknown), request: {:?} }}", self.request)
+        write!(f, "Transaction {{ deliverable: (unknown), request: {:?} }}", self.request)
     }
 }
 
-impl<D: Dispatcher> Transaction<D> {
+impl<D: Deliverable> Transaction<D> {
     pub fn new(
-        dispatcher: D,
+        deliverable: D,
         request: Request,
     ) -> Transaction<D> {
         Transaction {
-            dispatcher,
+            deliverable,
             request,
         }
     }
 
     pub(crate) fn spawn_request(self, client: &Client<HttpsConnector<HttpConnector>>, handle: &Handle, timeout: Duration, counter: Counter) {
-        let Transaction { mut dispatcher, request } = self;
+        let Transaction { mut deliverable, request } = self;
 
         let task = task::current();
         let request_future = client.request(request);
@@ -70,7 +70,7 @@ impl<D: Dispatcher> Transaction<D> {
         let start_time = Instant::now();
         match Timeout::new(timeout, handle) {
             Err(error) => {
-                dispatcher.notify(DeliveryResult::TimeoutError {
+                deliverable.complete(DeliveryResult::TimeoutError {
                     error,
                     duration: start_time.elapsed(),
                 });
@@ -86,7 +86,7 @@ impl<D: Dispatcher> Transaction<D> {
                         // Got response
                         Ok(Either::A((response, _timeout))) => {
                             trace!("Finished transaction with response: {:?}, duration: {:?}", response, duration);
-                            dispatcher.notify(DeliveryResult::Response {
+                            deliverable.complete(DeliveryResult::Response {
                                 inner: response,
                                 duration,
                             });
@@ -94,14 +94,14 @@ impl<D: Dispatcher> Transaction<D> {
                         // Request timed out
                         Ok(Either::B((_timeout_error, _request))) => {
                             trace!("Finished transaction with timeout, duration: {:?}", duration);
-                            dispatcher.notify(DeliveryResult::Timeout {
+                            deliverable.complete(DeliveryResult::Timeout {
                                 duration,
                             });
                         },
                         // Request errored
                         Err(Either::A((request_error, _timeout))) => {
                             trace!("Transaction errored during hyper, error: {}, duration: {:?}", request_error, duration);
-                            dispatcher.notify(DeliveryResult::HyperError {
+                            deliverable.complete(DeliveryResult::HyperError {
                                 error: request_error,
                                 duration,
                             });
@@ -109,7 +109,7 @@ impl<D: Dispatcher> Transaction<D> {
                         // Timeout errored
                         Err(Either::B((timeout_error, _request))) => {
                             trace!("Transaction errored during timeout, error: {}, duration: {:?}", timeout_error, duration);
-                            dispatcher.notify(DeliveryResult::TimeoutError {
+                            deliverable.complete(DeliveryResult::TimeoutError {
                                 error: timeout_error,
                                 duration,
                             });
