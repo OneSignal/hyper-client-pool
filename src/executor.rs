@@ -144,52 +144,59 @@ impl<D: Deliverable> Future for Executor<D> {
     type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        // If self.state is not set, then it will be finished
-        // so should only be not set if Finished
-        let state = mem::replace(&mut self.state, ExecutorState::Finished);
+        loop {
+            // If self.state is not set, then it will be finished
+            // so should only be not set if Finished
+            let state = mem::replace(&mut self.state, ExecutorState::Finished);
+            let mut state_changed = false;
 
-        self.state = match state {
-            ExecutorState::Running(mut receiver) => {
-                loop {
-                    match receiver.poll() {
-                        Ok(Async::Ready(Some(msg))) => {
-                            match msg {
-                                ExecutorMessage::Transaction((transaction, counter)) => {
-                                    info!("Executor: spawning transaction.");
+            self.state = match state {
+                ExecutorState::Running(mut receiver) => {
+                    loop {
+                        match receiver.poll() {
+                            Ok(Async::Ready(Some(msg))) => {
+                                match msg {
+                                    ExecutorMessage::Transaction((transaction, counter)) => {
+                                        info!("Executor: spawning transaction.");
 
-                                    transaction.spawn_request(
-                                        &self.client,
-                                        &self.handle,
-                                        self.transaction_timeout.clone(),
-                                        counter
-                                    );
-                                },
-                                ExecutorMessage::Shutdown => {
-                                    info!("Executor: received shutdown notice, shutting down..");
-
-                                    // There cannot be any other messages in the receiver queue
-                                    // because sending the shutdown drops the receiver
-                                    break ExecutorState::Draining;
-                                },
-                            };
-                        },
-                        // No messages
-                        Ok(Async::NotReady) => break ExecutorState::Running(receiver),
-                        // All senders dropped or errored
-                        // (shouldn't be possible with () error type), shutdown
-                        Ok(Async::Ready(None)) | Err(()) => break ExecutorState::Draining,
+                                        transaction.spawn_request(
+                                            &self.client,
+                                            &self.handle,
+                                            self.transaction_timeout.clone(),
+                                            counter
+                                        );
+                                    },
+                                    ExecutorMessage::Shutdown => {
+                                        info!("Executor: received shutdown notice, shutting down..");
+                                        // There cannot be any other messages in the receiver queue
+                                        // because sending the shutdown drops the receiver
+                                        state_changed = true;
+                                        break ExecutorState::Draining;
+                                    },
+                                };
+                            },
+                            // No messages
+                            Ok(Async::NotReady) => break ExecutorState::Running(receiver),
+                            // All senders dropped or errored
+                            // (shouldn't be possible with () error type), shutdown
+                            Ok(Async::Ready(None)) | Err(()) => break ExecutorState::Draining,
+                        }
                     }
-                }
-            },
-            ExecutorState::Draining => {
-                if self.transaction_counter.get() > 0 {
-                    ExecutorState::Draining
-                } else {
-                    return Ok(Async::Ready(()));
-                }
-            },
-            ExecutorState::Finished => panic!("Should not poll() after Executor is finished!"),
-        };
+                },
+                ExecutorState::Draining => {
+                    if self.transaction_counter.get() > 0 {
+                        ExecutorState::Draining
+                    } else {
+                        return Ok(Async::Ready(()));
+                    }
+                },
+                ExecutorState::Finished => panic!("Should not poll() after Executor is finished!"),
+            };
+
+            if !state_changed {
+                break;
+            }
+        }
 
         Ok(Async::NotReady)
     }
