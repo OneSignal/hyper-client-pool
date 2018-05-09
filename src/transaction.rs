@@ -1,11 +1,12 @@
 use std::fmt;
 use std::io;
+use std::string;
 use std::time::{Instant, Duration};
 
-use futures::{Future, task};
-use futures::future::Either;
+use futures::{Stream, Future, task};
+use futures::future::{self, Either};
 use hyper_tls::HttpsConnector;
-use hyper::{self, Response, Request, Client};
+use hyper::{self, StatusCode, Request, Client};
 use hyper::client::HttpConnector;
 use tokio_core::reactor::{Handle, Timeout};
 
@@ -20,7 +21,8 @@ use deliverable::Deliverable;
 #[derive(Debug)]
 pub enum DeliveryResult {
     Response {
-        inner: Response,
+        status: StatusCode,
+        body: String,
         duration: Duration,
     },
 
@@ -33,10 +35,16 @@ pub enum DeliveryResult {
         duration: Duration,
     },
 
-    HyperError {
-        error: hyper::Error,
+    DeliveryError {
+        error: DeliveryError,
         duration: Duration,
     },
+}
+
+#[derive(Debug)]
+pub enum DeliveryError {
+    Hyper(hyper::Error),
+    Body(string::FromUtf8Error),
 }
 
 pub struct Transaction<D: Deliverable> {
@@ -65,7 +73,21 @@ impl<D: Deliverable> Transaction<D> {
         let Transaction { mut deliverable, request } = self;
 
         let task = task::current();
-        let request_future = client.request(request);
+        let request_future = client.request(request)
+            .map_err(DeliveryError::Hyper)
+            .and_then(|response| {
+                let status = response.status();
+                response.body()
+                    .map_err(DeliveryError::Hyper)
+                    .fold(Vec::new(), |mut acc, chunk| {
+                        acc.extend_from_slice(&*chunk);
+                        future::ok::<_, DeliveryError>(acc)
+                    })
+                    .and_then(move |v| {
+                        let body = String::from_utf8(v).map_err(DeliveryError::Body)?;
+                        Ok::<_, DeliveryError>((status, body))
+                    })
+            });
 
         let start_time = Instant::now();
         match Timeout::new(timeout, handle) {
@@ -84,10 +106,11 @@ impl<D: Deliverable> Transaction<D> {
                     let duration = start_time.elapsed();
                     match res {
                         // Got response
-                        Ok(Either::A((response, _timeout))) => {
-                            trace!("Finished transaction with response: {:?}, duration: {:?}", response, duration);
+                        Ok(Either::A(((status, body), _timeout))) => {
+                            trace!("Finished transaction with status: {:?}, body: {}, duration: {:?}", status, body, duration);
                             deliverable.complete(DeliveryResult::Response {
-                                inner: response,
+                                status,
+                                body,
                                 duration,
                             });
                         },
@@ -99,10 +122,10 @@ impl<D: Deliverable> Transaction<D> {
                             });
                         },
                         // Request errored
-                        Err(Either::A((request_error, _timeout))) => {
-                            trace!("Transaction errored during hyper, error: {}, duration: {:?}", request_error, duration);
-                            deliverable.complete(DeliveryResult::HyperError {
-                                error: request_error,
+                        Err(Either::A((delivery_error, _timeout))) => {
+                            trace!("Transaction errored during delivery, error: {:?}, duration: {:?}", delivery_error, duration);
+                            deliverable.complete(DeliveryResult::DeliveryError {
+                                error: delivery_error,
                                 duration,
                             });
                         },
