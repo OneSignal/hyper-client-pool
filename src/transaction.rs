@@ -1,6 +1,5 @@
 use std::fmt;
 use std::io;
-use std::string;
 use std::time::{Instant, Duration};
 
 use futures::{Stream, Future, task};
@@ -22,7 +21,7 @@ use deliverable::Deliverable;
 pub enum DeliveryResult {
     Response {
         status: StatusCode,
-        body: String,
+        body: Vec<u8>,
         duration: Duration,
     },
 
@@ -35,16 +34,10 @@ pub enum DeliveryResult {
         duration: Duration,
     },
 
-    DeliveryError {
-        error: DeliveryError,
+    HyperError {
+        error: hyper::Error,
         duration: Duration,
     },
-}
-
-#[derive(Debug)]
-pub enum DeliveryError {
-    Hyper(hyper::Error),
-    Body(string::FromUtf8Error),
 }
 
 pub struct Transaction<D: Deliverable> {
@@ -74,19 +67,14 @@ impl<D: Deliverable> Transaction<D> {
 
         let task = task::current();
         let request_future = client.request(request)
-            .map_err(DeliveryError::Hyper)
             .and_then(|response| {
                 let status = response.status();
                 response.body()
-                    .map_err(DeliveryError::Hyper)
                     .fold(Vec::new(), |mut acc, chunk| {
                         acc.extend_from_slice(&*chunk);
-                        future::ok::<_, DeliveryError>(acc)
+                        future::ok::<_, hyper::Error>(acc)
                     })
-                    .and_then(move |v| {
-                        let body = String::from_utf8(v).map_err(DeliveryError::Body)?;
-                        Ok::<_, DeliveryError>((status, body))
-                    })
+                    .map(move |body| (status, body))
             });
 
         let start_time = Instant::now();
@@ -107,7 +95,7 @@ impl<D: Deliverable> Transaction<D> {
                     match res {
                         // Got response
                         Ok(Either::A(((status, body), _timeout))) => {
-                            trace!("Finished transaction with status: {:?}, body: {}, duration: {:?}", status, body, duration);
+                            trace!("Finished transaction with status: {:?}, duration: {:?}", status, duration);
                             deliverable.complete(DeliveryResult::Response {
                                 status,
                                 body,
@@ -122,10 +110,10 @@ impl<D: Deliverable> Transaction<D> {
                             });
                         },
                         // Request errored
-                        Err(Either::A((delivery_error, _timeout))) => {
-                            trace!("Transaction errored during delivery, error: {:?}, duration: {:?}", delivery_error, duration);
-                            deliverable.complete(DeliveryResult::DeliveryError {
-                                error: delivery_error,
+                        Err(Either::A((hyper_error, _timeout))) => {
+                            trace!("Transaction errored during delivery, error: {:?}, duration: {:?}", hyper_error, duration);
+                            deliverable.complete(DeliveryResult::HyperError {
+                                error: hyper_error,
                                 duration,
                             });
                         },
