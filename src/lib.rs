@@ -3,9 +3,10 @@
 extern crate fpool;
 extern crate futures;
 extern crate hyper_tls;
-extern crate hyper;
 extern crate native_tls;
 extern crate tokio_core;
+
+pub extern crate hyper;
 
 mod config;
 mod counter;
