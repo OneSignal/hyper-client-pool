@@ -7,7 +7,7 @@ use fpool::{ActResult, RoundRobinPool};
 
 use config::Config;
 use deliverable::Deliverable;
-use error::Error;
+use error::{NewError, RequestError, Error};
 use executor::{Executor, SendError, SpawnError, ExecutorHandle};
 use transaction::Transaction;
 
@@ -24,20 +24,22 @@ pub struct Pool<D: Deliverable> {
 
 impl<D: Deliverable> Pool<D> {
     /// Creat a new pool according to config
-    pub fn new(mut config: Config) -> Result<Pool<D>, Error<D>> {
+    pub fn new(mut config: Config) -> Result<Pool<D>, NewError> {
         // Make sure config.workers is a reasonable value
         let num_workers = cmp::max(1, config.workers);
         config.workers = num_workers;
 
         let executor_handles = RoundRobinPool::builder(config.workers, move || {
-            Executor::spawn(&config)
-                .map_err(|err| {
-                    match err {
-                        SpawnError::ThreadSpawn(err) => Error::ThreadSpawn(err),
-                        SpawnError::HttpsConnector(err) => Error::HttpsConnector(err),
-                    }
-                })
-        }).build()?;
+                Executor::spawn(&config)
+                    .map_err(|err| {
+                        match err {
+                            SpawnError::ThreadSpawn(err) => Error::ThreadSpawn(err),
+                            SpawnError::HttpsConnector(err) => Error::HttpsConnector(err),
+                        }
+                    })
+            })
+            .build()
+            .map_err(NewError::convert)?;
 
         Ok(Pool {
             executor_handles,
@@ -51,7 +53,7 @@ impl<D: Deliverable> Pool<D> {
     pub fn request(
         &mut self,
         transaction: Transaction<D>,
-    ) -> Result<(), Error<D>> {
+    ) -> Result<(), RequestError<D>> {
         self.executor_handles.act(move |handle| {
             match handle.send(transaction) {
                 Err(SendError::Full(transaction)) => {
@@ -63,7 +65,7 @@ impl<D: Deliverable> Pool<D> {
                 },
                 _ => ActResult::Valid,
             }
-        })
+        }).map_err(RequestError::convert)
     }
 
     /// Shutdown the pool

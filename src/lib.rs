@@ -19,7 +19,7 @@ mod transaction;
 pub use deliverable::Deliverable;
 pub use transaction::{Transaction, DeliveryResult};
 pub use pool::Pool;
-pub use error::Error;
+pub use error::{RequestError, NewError};
 pub use config::Config;
 
 #[cfg(test)]
@@ -137,7 +137,7 @@ mod tests {
             )
         )
         {
-            Err(Error::Full(_transaction)) => (), // expected
+            Err(RequestError::Full(_transaction)) => (), // expected
             res => panic!("Expected Error::Full, got {:?}", res),
         }
 
