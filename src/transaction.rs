@@ -5,8 +5,8 @@ use std::time::{Instant, Duration};
 use futures::{Stream, Future, task};
 use futures::future::{self, Either};
 use hyper_tls::HttpsConnector;
-use hyper::{self, Request, Response, Client};
-use hyper::client::HttpConnector;
+use hyper::{self, Request, Client};
+use hyper::client::{Response, HttpConnector};
 use tokio_core::reactor::{Handle, Timeout};
 
 use counter::Counter;
