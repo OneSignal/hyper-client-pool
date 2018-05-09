@@ -65,6 +65,8 @@ impl<D: Deliverable> Transaction<D> {
     pub(crate) fn spawn_request(self, client: &Client<HttpsConnector<HttpConnector>>, handle: &Handle, timeout: Duration, counter: Counter) {
         let Transaction { mut deliverable, request } = self;
 
+        trace!("Spawning request: {:?}", request);
+
         let task = task::current();
         let request_future = client.request(request)
             .and_then(|response| {
