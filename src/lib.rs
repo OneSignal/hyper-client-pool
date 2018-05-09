@@ -19,7 +19,7 @@ mod transaction;
 pub use deliverable::Deliverable;
 pub use transaction::{Transaction, DeliveryResult};
 pub use pool::Pool;
-pub use error::{RequestError, NewError};
+pub use error::{RequestError, SpawnError};
 pub use config::Config;
 
 #[cfg(test)]

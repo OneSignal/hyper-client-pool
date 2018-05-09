@@ -1,14 +1,13 @@
 //! HTTP Client Worker Pool
 //!
 //! This module provides a simple API wrapping a pool of HTTP clients
-use std::io;
 use std::mem;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use futures::{Poll, Future, Stream, Async};
 use futures::sync::mpsc as FuturesMpsc;
-use hyper_tls::{self, HttpsConnector};
+use hyper_tls::HttpsConnector;
 use hyper::{self, Client};
 use hyper::client::HttpConnector;
 use native_tls::TlsConnector;
@@ -17,6 +16,7 @@ use tokio_core::reactor::{Core, Handle};
 use config::Config;
 use counter::{Counter, WeakCounter};
 use deliverable::Deliverable;
+use error::{RequestError, SpawnError};
 use transaction::Transaction;
 
 /// Lives on a separate thread and runs Transactions sent by Pool
@@ -36,16 +36,6 @@ pub struct ExecutorHandle<D: Deliverable> {
     join_handle: JoinHandle<()>,
 }
 
-pub enum SendError<D: Deliverable> {
-    Full(Transaction<D>),
-    FailedSend(Transaction<D>),
-}
-
-pub enum SpawnError {
-    ThreadSpawn(io::Error),
-    HttpsConnector(hyper_tls::Error),
-}
-
 enum ExecutorState<D: Deliverable> {
     Running(FuturesMpsc::UnboundedReceiver<ExecutorMessage<D>>),
     Draining,
@@ -58,16 +48,16 @@ enum ExecutorMessage<D: Deliverable> {
 }
 
 impl<D: Deliverable> ExecutorHandle<D> {
-    pub fn send(&mut self, transaction: Transaction<D>) -> Result<(), SendError<D>> {
+    pub fn send(&mut self, transaction: Transaction<D>) -> Result<(), RequestError<D>> {
         if self.is_full() {
-            return Err(SendError::Full(transaction));
+            return Err(RequestError::Full(transaction));
         }
 
         let package = ExecutorMessage::Transaction((transaction, self.transaction_counter.clone().upgrade()));
         if let Err(err) = self.sender.unbounded_send(package) {
             match err.into_inner() {
                 ExecutorMessage::Transaction((transaction, _counter)) => {
-                    return Err(SendError::FailedSend(transaction));
+                    return Err(RequestError::FailedSend(transaction));
                 },
                 _ => unreachable!(),
             }

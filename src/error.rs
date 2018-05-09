@@ -14,7 +14,7 @@ pub enum Error<D: Deliverable> {
 }
 
 #[derive(Debug)]
-pub enum NewError {
+pub enum SpawnError {
     ThreadSpawn(io::Error),
     HttpsConnector(hyper_tls::Error),
 }
@@ -25,11 +25,11 @@ pub enum RequestError<D: Deliverable> {
     FailedSend(Transaction<D>),
 }
 
-impl NewError {
-    pub fn convert<D: Deliverable>(error: Error<D>) -> NewError {
+impl SpawnError {
+    pub fn convert<D: Deliverable>(error: Error<D>) -> SpawnError {
         match error {
-            Error::ThreadSpawn(err) => NewError::ThreadSpawn(err),
-            Error::HttpsConnector(err) => NewError::HttpsConnector(err),
+            Error::ThreadSpawn(err) => SpawnError::ThreadSpawn(err),
+            Error::HttpsConnector(err) => SpawnError::HttpsConnector(err),
             _ => unreachable!(),
         }
     }

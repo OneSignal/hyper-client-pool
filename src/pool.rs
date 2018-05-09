@@ -7,8 +7,8 @@ use fpool::{ActResult, RoundRobinPool};
 
 use config::Config;
 use deliverable::Deliverable;
-use error::{NewError, RequestError, Error};
-use executor::{Executor, SendError, SpawnError, ExecutorHandle};
+use error::{SpawnError, RequestError, Error};
+use executor::{Executor, ExecutorHandle};
 use transaction::Transaction;
 
 /// Pool of HTTP clients
@@ -24,7 +24,7 @@ pub struct Pool<D: Deliverable> {
 
 impl<D: Deliverable> Pool<D> {
     /// Creat a new pool according to config
-    pub fn new(mut config: Config) -> Result<Pool<D>, NewError> {
+    pub fn new(mut config: Config) -> Result<Pool<D>, SpawnError> {
         // Make sure config.workers is a reasonable value
         let num_workers = cmp::max(1, config.workers);
         config.workers = num_workers;
@@ -39,7 +39,7 @@ impl<D: Deliverable> Pool<D> {
                     })
             })
             .build()
-            .map_err(NewError::convert)?;
+            .map_err(SpawnError::convert)?;
 
         Ok(Pool {
             executor_handles,
@@ -56,10 +56,10 @@ impl<D: Deliverable> Pool<D> {
     ) -> Result<(), RequestError<D>> {
         self.executor_handles.act(move |handle| {
             match handle.send(transaction) {
-                Err(SendError::Full(transaction)) => {
+                Err(RequestError::Full(transaction)) => {
                     ActResult::ValidWithError(Error::Full(transaction))
                 },
-                Err(SendError::FailedSend(transaction)) => {
+                Err(RequestError::FailedSend(transaction)) => {
                     // Recreate the executor / thread if it failed to send
                     ActResult::InvalidWithError(Error::FailedSend(transaction))
                 },
