@@ -5,7 +5,7 @@ use std::time::{Instant, Duration};
 use futures::{Stream, Future, task};
 use futures::future::{self, Either};
 use hyper_tls::HttpsConnector;
-use hyper::{self, StatusCode, Request, Client};
+use hyper::{self, Request, Response, Client};
 use hyper::client::HttpConnector;
 use tokio_core::reactor::{Handle, Timeout};
 
@@ -20,7 +20,7 @@ use deliverable::Deliverable;
 #[derive(Debug)]
 pub enum DeliveryResult {
     Response {
-        status: StatusCode,
+        response: Response,
         body: Vec<u8>,
         duration: Duration,
     },
@@ -69,12 +69,15 @@ impl<D: Deliverable> Transaction<D> {
         let request_future = client.request(request)
             .and_then(|response| {
                 let status = response.status();
+                let headers = response.headers().clone();
                 response.body()
                     .fold(Vec::new(), |mut acc, chunk| {
                         acc.extend_from_slice(&*chunk);
                         future::ok::<_, hyper::Error>(acc)
                     })
-                    .map(move |body| (status, body))
+                    .map(move |body| {
+                        (Response::new().with_status(status).with_headers(headers), body)
+                    })
             });
 
         let start_time = Instant::now();
@@ -94,10 +97,10 @@ impl<D: Deliverable> Transaction<D> {
                     let duration = start_time.elapsed();
                     match res {
                         // Got response
-                        Ok(Either::A(((status, body), _timeout))) => {
-                            trace!("Finished transaction with status: {:?}, duration: {:?}", status, duration);
+                        Ok(Either::A(((response, body), _timeout))) => {
+                            trace!("Finished transaction with response: {:?}, duration: {:?}", response, duration);
                             deliverable.complete(DeliveryResult::Response {
-                                status,
+                                response,
                                 body,
                                 duration,
                             });

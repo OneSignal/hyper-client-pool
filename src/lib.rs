@@ -34,8 +34,8 @@ mod tests {
 
     fn assert_successful_result(result: DeliveryResult) {
         match result {
-            DeliveryResult::Response { status, .. } => {
-                assert!(status.is_success(), format!("Expected successful response: {:?}", status));
+            DeliveryResult::Response { response, .. } => {
+                assert!(response.status().is_success(), format!("Expected successful response: {:?}", response.status()));
             },
             res => panic!("Expected DeliveryResult::Response, unexpected delivery result: {:?}", res),
         }
