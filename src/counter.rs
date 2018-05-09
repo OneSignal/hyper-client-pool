@@ -5,7 +5,21 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// on the number of copies. The count is automaticaly updated on drop.
 pub struct Counter(Arc<AtomicUsize>);
 
+#[derive(Clone)]
+pub struct WeakCounter(Arc<AtomicUsize>);
+
 impl Counter {
+    /// Create a new RAII counter
+    pub fn new() -> Counter {
+        Counter(Arc::new(AtomicUsize::new(1)))
+    }
+
+    pub fn downgrade(self) -> WeakCounter {
+        WeakCounter(self.0.clone())
+    }
+}
+
+impl WeakCounter {
     /// Get the count
     ///
     /// This method is inherently racey. Assume the count will have changed once
@@ -15,19 +29,9 @@ impl Counter {
         self.0.load(Ordering::Acquire)
     }
 
-    /// Create a new RAII counter
-    pub fn new() -> Counter {
-        // Note the value in the Arc doesn't matter since we rely on the Arc's
-        // strong count to provide a value.
-        Counter(Arc::new(AtomicUsize::new(1)))
-    }
-}
-
-impl Clone for Counter {
-    fn clone(&self) -> Counter {
-        let count = self.0.clone();
-        count.fetch_add(1, Ordering::AcqRel);
-        Counter(count)
+    pub fn upgrade(self) -> Counter {
+        self.0.fetch_add(1, Ordering::AcqRel);
+        Counter(self.0.clone())
     }
 }
 

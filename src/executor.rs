@@ -15,7 +15,7 @@ use native_tls::TlsConnector;
 use tokio_core::reactor::{Core, Handle};
 
 use config::Config;
-use counter::Counter;
+use counter::{Counter, WeakCounter};
 use dispatcher::Dispatcher;
 use transaction::Transaction;
 
@@ -23,13 +23,13 @@ use transaction::Transaction;
 pub struct Executor<D: Dispatcher> {
     handle: Handle,
     client: Client<HttpsConnector<HttpConnector>>,
-    transaction_counter: Counter,
+    transaction_counter: WeakCounter,
     transaction_timeout: Duration,
     state: ExecutorState<D>,
 }
 
 pub struct ExecutorHandle<D: Dispatcher> {
-    transaction_counter: Counter,
+    transaction_counter: WeakCounter,
     max_transactions: usize,
 
     sender: FuturesMpsc::UnboundedSender<ExecutorMessage<D>>,
@@ -57,20 +57,13 @@ enum ExecutorMessage<D: Dispatcher> {
     Shutdown,
 }
 
-/// Number of transactions running on this executor thread
-/// Because both the ExecutorHandle and Executor are holding on to a copy,
-/// this is actually 2 larger than the number of transactions
-fn count_transactions(counter: &Counter) -> usize {
-    counter.get() - 2
-}
-
 impl<D: Dispatcher> ExecutorHandle<D> {
     pub fn send(&mut self, transaction: Transaction<D>) -> Result<(), SendError<D>> {
         if self.is_full() {
             return Err(SendError::Full(transaction));
         }
 
-        let package = ExecutorMessage::Transaction((transaction, self.transaction_counter.clone()));
+        let package = ExecutorMessage::Transaction((transaction, self.transaction_counter.clone().upgrade()));
         if let Err(err) = self.sender.unbounded_send(package) {
             match err.into_inner() {
                 ExecutorMessage::Transaction((transaction, _counter)) => {
@@ -83,23 +76,20 @@ impl<D: Dispatcher> ExecutorHandle<D> {
         Ok(())
     }
 
-    pub fn send_shutdown(&mut self) {
+    pub fn send_shutdown(self) -> JoinHandle<()> {
         let _ = self.sender.unbounded_send(ExecutorMessage::Shutdown);
-    }
-
-    pub fn join(self) -> thread::Result<()> {
-        self.join_handle.join()
+        self.join_handle
     }
 
     fn is_full(&self) -> bool {
-        count_transactions(&self.transaction_counter) >= self.max_transactions
+        self.transaction_counter.get() >= self.max_transactions
     }
 }
 
 impl<D: Dispatcher> Executor<D> {
     pub fn spawn(config: &Config) -> Result<ExecutorHandle<D>, SpawnError> {
         let (tx, rx) = FuturesMpsc::unbounded();
-        let counter = Counter::new();
+        let counter = Counter::new().downgrade();
         let counter_clone = counter.clone();
         let keep_alive_timeout = config.keep_alive_timeout;
         let dns_threads_per_worker = config.dns_threads_per_worker;
@@ -177,13 +167,8 @@ impl<D: Dispatcher> Future for Executor<D> {
                                 ExecutorMessage::Shutdown => {
                                     info!("Executor: received shutdown notice, shutting down..");
 
-                                    // Not compile-time-enforced, but there is an assumption here
-                                    // that there are no other messages in the queue after shutdown
-                                    // because send_shutdown() is called immediately before
-                                    // shutdown() which consumes the handle
-                                    //
-                                    // Shutdown the Executor, transactions in flight will continue
-                                    // running until all finished
+                                    // There cannot be any other messages in the receiver queue
+                                    // because sending the shutdown drops the receiver
                                     break ExecutorState::Draining;
                                 },
                             };
@@ -197,7 +182,7 @@ impl<D: Dispatcher> Future for Executor<D> {
                 }
             },
             ExecutorState::Draining => {
-                if count_transactions(&self.transaction_counter) > 0 {
+                if self.transaction_counter.get() > 0 {
                     ExecutorState::Draining
                 } else {
                     return Ok(Async::Ready(()));

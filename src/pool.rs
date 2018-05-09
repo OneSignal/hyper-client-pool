@@ -70,13 +70,13 @@ impl<D: Dispatcher> Pool<D> {
     ///
     /// Waits for all workers to be empty before stopping.
     pub fn shutdown(self) {
-        let mut handles = self.executor_handles.into_items();
-        for handle in handles.iter_mut() {
-            handle.send_shutdown();
-        }
+        let handles = self.executor_handles.into_items();
+        let join_handles : Vec<_> = handles.into_iter()
+            .map(|handle| handle.send_shutdown())
+            .collect();
 
-        for handle in handles.into_iter() {
-            let _ = handle.join();
+        for join_handle in join_handles.into_iter() {
+            let _ = join_handle.join();
         }
     }
 }
