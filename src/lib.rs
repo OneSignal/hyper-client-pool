@@ -32,6 +32,12 @@ mod tests {
     use hyper::{Request, Method};
     use super::*;
 
+    impl Deliverable for mpsc::Sender<DeliveryResult> {
+        fn complete(self, result: DeliveryResult) {
+            let _ = self.send(result);
+        }
+    }
+
     fn assert_successful_result(result: DeliveryResult) {
         match result {
             DeliveryResult::Response { response, .. } => {
