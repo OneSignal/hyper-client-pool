@@ -63,7 +63,7 @@ impl<D: Deliverable> Transaction<D> {
     }
 
     pub(crate) fn spawn_request(self, client: &Client<HttpsConnector<HttpConnector>>, handle: &Handle, timeout: Duration, counter: Counter) {
-        let Transaction { mut deliverable, request } = self;
+        let Transaction { deliverable, request } = self;
 
         trace!("Spawning request: {:?}", request);
 

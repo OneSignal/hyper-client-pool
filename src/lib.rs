@@ -81,7 +81,7 @@ mod tests {
     }
 
     impl Deliverable for SuccessfulCompletionCounter {
-        fn complete(&mut self, result: DeliveryResult) {
+        fn complete(self, result: DeliveryResult) {
             assert_successful_result(result);
             self.count.fetch_add(1, Ordering::AcqRel);
         }
