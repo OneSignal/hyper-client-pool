@@ -22,7 +22,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            keep_alive_timeout: Duration::from_secs(300),
+            keep_alive_timeout: Duration::from_secs(3),
             transaction_timeout: Duration::from_secs(10),
             max_transactions_per_worker: 1_000,
             workers: 2,

@@ -26,8 +26,11 @@ pub use config::Config;
 mod tests {
     extern crate env_logger;
 
+    use std::process::Command;
     use std::sync::{Arc, mpsc};
     use std::sync::atomic::{Ordering, AtomicUsize};
+    use std::thread;
+    use std::time::Duration;
 
     use hyper::{Request, Method};
     use super::*;
@@ -148,5 +151,59 @@ mod tests {
         }
 
         rx.recv().unwrap();
+    }
+
+    const ONE_SIGNAL_IP_ADDRESSES : [&'static str; 5] = [
+        "104.16.208.165",
+        "104.16.204.165",
+        "104.16.205.165",
+        "104.16.207.165",
+        "104.16.206.165",
+    ];
+
+    fn onesignal_connection_open() -> (bool, String) {
+        let output = Command::new("lsof")
+            .args(&["-i", "4tcp"])
+            .output()
+            .expect("command works");
+
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let lines : Vec<_> = stdout.split("\n").filter(|line| line.starts_with("hyper")).collect();
+        let stdout = lines.join("\n");
+
+        (lines.len() > 0 && ONE_SIGNAL_IP_ADDRESSES.iter().any(|addr| lines[0].contains(addr)), stdout)
+    }
+
+    fn assert_onesignal_connection_open(expected_open: bool) {
+        let (open, stdout) = onesignal_connection_open();
+        assert_eq!(expected_open, open, "Output:\n{}", stdout);
+    }
+
+    #[test]
+    fn keep_alive_works_as_expected() {
+        // block until no connections are open - this is unfortunate..
+        // but at least we have tests covering the keep-alive :)
+        while onesignal_connection_open().0 {}
+
+        let _ = env_logger::try_init();
+
+        let mut config = Config::default();
+        config.keep_alive_timeout = Duration::from_secs(3);
+
+        let mut pool = Pool::new(config).unwrap();
+        let (tx, rx) = mpsc::channel();
+
+        // Start first request
+        pool.request(
+            Transaction::new(tx.clone(), Request::new(Method::Get, "https://onesignal.com/".parse().unwrap()))
+        ).expect("request ok");
+
+        // wait for request to finish
+        rx.recv().unwrap();
+        assert_onesignal_connection_open(true);
+        thread::sleep(Duration::from_secs(2));
+        assert_onesignal_connection_open(true);
+        thread::sleep(Duration::from_secs(4));
+        assert_onesignal_connection_open(false);
     }
 }
