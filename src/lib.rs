@@ -188,7 +188,7 @@ mod tests {
         let _ = env_logger::try_init();
 
         let mut config = Config::default();
-        config.keep_alive_timeout = Duration::from_secs(3);
+        config.keep_alive_timeout = Duration::from_secs(2);
 
         let mut pool = Pool::new(config).unwrap();
         let (tx, rx) = mpsc::channel();
@@ -203,7 +203,7 @@ mod tests {
         assert_onesignal_connection_open(true);
         thread::sleep(Duration::from_secs(2));
         assert_onesignal_connection_open(true);
-        thread::sleep(Duration::from_secs(4));
+        thread::sleep(Duration::from_secs(2));
         assert_onesignal_connection_open(false);
     }
 }
