@@ -2,11 +2,13 @@ use std::fmt;
 use std::io;
 use std::time::{Instant, Duration};
 
-use futures::{Stream, Future, task};
+use futures::{Stream, Poll, Async, Future, task};
 use futures::future::{self, Either};
+use futures::task::Task;
 use hyper_tls::HttpsConnector;
 use hyper::{self, Request, Client};
 use hyper::client::{Response, HttpConnector};
+use std::marker::PhantomData;
 use tokio_core::reactor::{Handle, Timeout};
 
 use counter::Counter;
@@ -19,6 +21,8 @@ use deliverable::Deliverable;
 /// in order to prevent data loss.
 #[derive(Debug)]
 pub enum DeliveryResult {
+    Dropped,
+
     Response {
         response: Response,
         body: Vec<u8>,
@@ -51,6 +55,101 @@ impl<D: Deliverable> fmt::Debug for Transaction<D> {
     }
 }
 
+struct SpawnedTransaction<D: Deliverable, W: Future, R: Future>
+{
+    deliverable: Option<D>,
+    work: W,
+    _counter: Counter,
+    start_time: Instant,
+    task: Task,
+
+    _r: PhantomData<R>,
+}
+
+impl<D: Deliverable, W: Future, R: Future> Drop for SpawnedTransaction<D, W, R> {
+    fn drop(&mut self) {
+        trace!("Dropping transaction..");
+        self.deliverable
+            .take()
+            .map(|deliverable| {
+                deliverable.complete(DeliveryResult::Dropped);
+            });
+    }
+}
+
+impl<D, W, R> Future for SpawnedTransaction<D, W, R>
+where
+    D: Deliverable,
+    W: Future<
+        Item=Either<((Response, Vec<u8>), Timeout), ((), R)>,
+        Error=Either<(hyper::Error, Timeout), (io::Error, R)>
+    >,
+    R: Future<
+        Item=(Response, Vec<u8>),
+        Error=hyper::Error,
+    >,
+{
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        let delivery_result = match self.work.poll() {
+            Ok(Async::NotReady) => return Ok(Async::NotReady),
+            Err(err) => {
+                let duration = self.start_time.elapsed();
+                // Request errored
+                match err {
+                    Either::A((hyper_error, _timeout)) => {
+                        trace!("Transaction errored during delivery, error: {:?}, duration: {:?}", hyper_error, duration);
+                        DeliveryResult::HyperError {
+                            error: hyper_error,
+                            duration,
+                        }
+                    },
+                    // Timeout errored
+                    Either::B((timeout_error, _request)) => {
+                        trace!("Transaction errored during timeout, error: {}, duration: {:?}", timeout_error, duration);
+                        DeliveryResult::TimeoutError {
+                            error: timeout_error,
+                            duration,
+                        }
+                    }
+                }
+            },
+            Ok(Async::Ready(res)) => {
+                let duration = self.start_time.elapsed();
+                match res {
+                    // Got response
+                    Either::A(((response, body), _timeout)) => {
+                        trace!("Finished transaction with response: {:?}, duration: {:?}", response, duration);
+                        DeliveryResult::Response {
+                            response,
+                            body,
+                            duration,
+                        }
+                    },
+                    // Request timed out
+                    Either::B((_timeout, _request)) => {
+                        trace!("Finished transaction with timeout, duration: {:?}", duration);
+                        DeliveryResult::Timeout {
+                            duration,
+                        }
+                    },
+                }
+            }
+        };
+
+        self.deliverable
+            .take()
+            .map(|deliverable| {
+                deliverable.complete(delivery_result);
+                self.task.notify();
+            });
+
+        Ok(Async::Ready(()))
+    }
+}
+
 impl<D: Deliverable> Transaction<D> {
     pub fn new(
         deliverable: D,
@@ -64,7 +163,6 @@ impl<D: Deliverable> Transaction<D> {
 
     pub(crate) fn spawn_request(self, client: &Client<HttpsConnector<HttpConnector>>, handle: &Handle, timeout: Duration, counter: Counter) {
         let Transaction { deliverable, request } = self;
-
         trace!("Spawning request: {:?}", request);
 
         let task = task::current();
@@ -92,62 +190,24 @@ impl<D: Deliverable> Transaction<D> {
                 warn!("Could not create timeout on handle for hyper_client_pool::Transaction");
             },
             Ok(timeout) => {
-                let timed_request = request_future.select2(timeout).then(move |res| {
-                    // Hold onto counter until this point to count the transaction
-                    let _counter = counter;
-
-                    let duration = start_time.elapsed();
-                    match res {
-                        // Got response
-                        Ok(Either::A(((response, body), _timeout))) => {
-                            trace!("Finished transaction with response: {:?}, duration: {:?}", response, duration);
-                            deliverable.complete(DeliveryResult::Response {
-                                response,
-                                body,
-                                duration,
-                            });
-                        },
-                        // Request timed out
-                        Ok(Either::B((_timeout_error, _request))) => {
-                            trace!("Finished transaction with timeout, duration: {:?}", duration);
-                            deliverable.complete(DeliveryResult::Timeout {
-                                duration,
-                            });
-                        },
-                        // Request errored
-                        Err(Either::A((hyper_error, _timeout))) => {
-                            trace!("Transaction errored during delivery, error: {:?}, duration: {:?}", hyper_error, duration);
-                            deliverable.complete(DeliveryResult::HyperError {
-                                error: hyper_error,
-                                duration,
-                            });
-                        },
-                        // Timeout errored
-                        Err(Either::B((timeout_error, _request))) => {
-                            trace!("Transaction errored during timeout, error: {}, duration: {:?}", timeout_error, duration);
-                            deliverable.complete(DeliveryResult::TimeoutError {
-                                error: timeout_error,
-                                duration,
-                            });
-                        },
-                    }
-
-                    task.notify();
-                    Ok(())
+                let timed_request = request_future.select2(timeout);
+                handle.spawn(SpawnedTransaction {
+                    deliverable: Some(deliverable),
+                    work: timed_request,
+                    _counter: counter,
+                    start_time,
+                    task,
+                    _r: PhantomData,
                 });
-
-                handle.spawn(timed_request);
             }
         }
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     extern crate env_logger;
 
-    use futures::{Poll, Async};
     use hyper_tls::HttpsConnector;
     use hyper;
     use hyper::client::HttpConnector;
@@ -198,12 +258,14 @@ mod tests {
         handle: Handle,
     }
 
+    const TRANSACTION_SPAWN_COUNT: usize = 200;
+
     impl Future for SpawnTransactionsFuture {
         type Item = ();
         type Error = ();
 
         fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-            for _ in 0..200 {
+            for _ in 0..TRANSACTION_SPAWN_COUNT {
                 let transaction = Transaction::new(self.counter.clone(), Request::new(Method::Get, "https://onesignal.com/".parse().unwrap()));
                 transaction.spawn_request(&self.client, &self.handle, Duration::from_secs(10), Counter::new());
             }
@@ -213,13 +275,13 @@ mod tests {
     }
 
     #[test]
-    fn unfinished_transactions_get_sent_to_dispatcher() {
+    fn unfinished_transactions_get_sent_to_deliverable() {
         let _ = env_logger::try_init();
 
         let tls = TlsConnector::builder().and_then(|builder| builder.build()).unwrap();
         let counter = DeliveryCounter::new();
         let counter_clone = counter.clone();
-        thread::spawn(move || {
+        let join_handle = thread::spawn(move || {
             let mut core = Core::new().unwrap();
             let handle = core.handle();
             let handle2 = core.handle();
@@ -244,19 +306,9 @@ mod tests {
             let _ = core.run(work);
         });
 
-        let iter_duration = Duration::from_millis(100);
-        let start_time = Instant::now();
-        while start_time.elapsed().as_secs() < 10 {
-            if counter.total_count() == 100 {
-                // we finished getting all transactions back
-                // make sure it wasn't all responses
-                assert_ne!(counter.response_count(), 100);
-                return;
-            }
+        let _ = join_handle.join();
 
-            thread::sleep(iter_duration);
-        }
-
-        panic!("Did not receive all tranasction results after unfinished, only received: {}!", counter.total_count());
+        assert_ne!(counter.response_count(), TRANSACTION_SPAWN_COUNT);
+        assert_eq!(counter.total_count(), TRANSACTION_SPAWN_COUNT);
     }
 }
