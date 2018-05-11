@@ -141,3 +141,122 @@ impl<D: Deliverable> Transaction<D> {
         }
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    extern crate env_logger;
+
+    use futures::{Poll, Async};
+    use hyper_tls::HttpsConnector;
+    use hyper;
+    use hyper::client::HttpConnector;
+    use native_tls::TlsConnector;
+    use std::sync::Arc;
+    use std::sync::atomic::{Ordering, AtomicUsize};
+    use std::thread;
+    use tokio_core::reactor::{Core, Timeout};
+
+    use hyper::{Request, Method};
+    use super::*;
+
+    #[derive(Debug, Clone)]
+    struct DeliveryCounter {
+        total_count: Arc<AtomicUsize>,
+        response_count: Arc<AtomicUsize>,
+    }
+
+    impl DeliveryCounter {
+        fn new() -> DeliveryCounter {
+            DeliveryCounter {
+                total_count: Arc::new(AtomicUsize::new(0)),
+                response_count: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn total_count(&self) -> usize {
+            self.total_count.load(Ordering::Acquire)
+        }
+
+        fn response_count(&self) -> usize {
+            self.response_count.load(Ordering::Acquire)
+        }
+    }
+
+    impl Deliverable for DeliveryCounter {
+        fn complete(self, result: DeliveryResult) {
+            if let DeliveryResult::Response { .. } = result {
+                self.response_count.fetch_add(1, Ordering::AcqRel);
+            }
+            self.total_count.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    struct SpawnTransactionsFuture {
+        client: hyper::Client<HttpsConnector<HttpConnector>>,
+        counter: DeliveryCounter,
+        handle: Handle,
+    }
+
+    impl Future for SpawnTransactionsFuture {
+        type Item = ();
+        type Error = ();
+
+        fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+            for _ in 0..200 {
+                let transaction = Transaction::new(self.counter.clone(), Request::new(Method::Get, "https://onesignal.com/".parse().unwrap()));
+                transaction.spawn_request(&self.client, &self.handle, Duration::from_secs(10), Counter::new());
+            }
+
+            Ok(Async::Ready(()))
+        }
+    }
+
+    #[test]
+    fn unfinished_transactions_get_sent_to_dispatcher() {
+        let _ = env_logger::try_init();
+
+        let tls = TlsConnector::builder().and_then(|builder| builder.build()).unwrap();
+        let counter = DeliveryCounter::new();
+        let counter_clone = counter.clone();
+        thread::spawn(move || {
+            let mut core = Core::new().unwrap();
+            let handle = core.handle();
+            let handle2 = core.handle();
+
+            let mut http = HttpConnector::new(4, &handle);
+            http.enforce_http(false);
+            let connector = HttpsConnector::from((http, tls));
+            let client = hyper::Client::configure()
+                .connector(connector)
+                .build(&handle);
+
+            let work = SpawnTransactionsFuture {
+                client,
+                counter: counter_clone,
+                handle,
+            }.and_then(|()| {
+                Timeout::new(Duration::from_secs(3), &handle2).unwrap()
+                    .map_err(|_err| {})
+            });
+
+            // Run the transactions until the core finishes
+            let _ = core.run(work);
+        });
+
+        let iter_duration = Duration::from_millis(100);
+        let start_time = Instant::now();
+        while start_time.elapsed().as_secs() < 10 {
+            if counter.total_count() == 100 {
+                // we finished getting all transactions back
+                // make sure it wasn't all responses
+                assert_ne!(counter.response_count(), 100);
+                return;
+            }
+
+            thread::sleep(iter_duration);
+        }
+
+        panic!("Did not receive all tranasction results after unfinished, only received: {}!", counter.total_count());
+    }
+}
