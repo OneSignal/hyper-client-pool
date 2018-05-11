@@ -311,4 +311,44 @@ mod tests {
         assert_ne!(counter.response_count(), TRANSACTION_SPAWN_COUNT);
         assert_eq!(counter.total_count(), TRANSACTION_SPAWN_COUNT);
     }
+
+    #[test]
+    fn panicked_transactions_get_sent_to_deliverable() {
+        let _ = env_logger::try_init();
+
+        let tls = TlsConnector::builder().and_then(|builder| builder.build()).unwrap();
+        let counter = DeliveryCounter::new();
+        let counter_clone = counter.clone();
+        let join_handle = thread::spawn(move || {
+            let mut core = Core::new().unwrap();
+            let handle = core.handle();
+            let handle2 = core.handle();
+
+            let mut http = HttpConnector::new(4, &handle);
+            http.enforce_http(false);
+            let connector = HttpsConnector::from((http, tls));
+            let client = hyper::Client::configure()
+                .connector(connector)
+                .build(&handle);
+
+            let work = SpawnTransactionsFuture {
+                client,
+                counter: counter_clone,
+                handle,
+            }.and_then(|()| {
+                Timeout::new(Duration::from_secs(3), &handle2).unwrap()
+                    .map_err(|_err| {
+                        panic!("Hahaha, I will panic now.");
+                    })
+            });
+
+            // Run the transactions until the core finishes
+            let _ = core.run(work);
+        });
+
+        let _ = join_handle.join();
+
+        assert_ne!(counter.response_count(), TRANSACTION_SPAWN_COUNT);
+        assert_eq!(counter.total_count(), TRANSACTION_SPAWN_COUNT);
+    }
 }
