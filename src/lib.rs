@@ -41,6 +41,10 @@ mod tests {
         }
     }
 
+    fn onesignal_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
+        Transaction::new(deliverable, Request::new(Method::Get, "https://onesignal.com/".parse().unwrap()))
+    }
+
     fn assert_successful_result(result: DeliveryResult) {
         match result {
             DeliveryResult::Response { response, .. } => {
@@ -61,12 +65,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
 
         for _ in 0..5 {
-            pool.request(
-                Transaction::new(
-                    tx.clone(),
-                    Request::new(Method::Get, "https://onesignal.com/".parse().unwrap()),
-                )
-            ).expect("request ok");
+            pool.request(onesignal_transaction(tx.clone())).expect("request ok");
         }
 
         for _ in 0..5 {
@@ -108,12 +107,7 @@ mod tests {
 
         let mut pool = Pool::new(config).unwrap();
         for _ in 0..txn {
-            pool.request(
-                Transaction::new(
-                    counter.clone(),
-                    Request::new(Method::Get, "https://onesignal.com/".parse().unwrap()),
-                )
-            ).expect("request ok");
+            pool.request(onesignal_transaction(counter.clone())).expect("request ok");
         }
 
         pool.shutdown();
@@ -132,20 +126,9 @@ mod tests {
         let (tx, rx) = mpsc::channel();
 
         // Start first request
-        pool.request(
-            Transaction::new(
-                tx.clone(),
-                Request::new(Method::Get, "https://onesignal.com/".parse().unwrap()),
-            )
-        ).expect("request ok");
+        pool.request(onesignal_transaction(tx.clone())).expect("request ok");
 
-        match pool.request(
-            Transaction::new(
-                tx.clone(),
-                Request::new(Method::Get, "https://onesignal.com/".parse().unwrap()),
-            )
-        )
-        {
+        match pool.request(onesignal_transaction(tx.clone())) {
             Err(RequestError::Full(_transaction)) => (), // expected
             res => panic!("Expected Error::Full, got {:?}", res),
         }
@@ -161,7 +144,7 @@ mod tests {
         "104.16.206.165",
     ];
 
-    fn onesignal_connection_open() -> (bool, String) {
+    fn onesignal_connection_count() -> (usize, String) {
         let output = Command::new("lsof")
             .args(&["-i", "4tcp"])
             .output()
@@ -171,39 +154,47 @@ mod tests {
         let lines : Vec<_> = stdout.split("\n").filter(|line| line.starts_with("hyper")).collect();
         let stdout = lines.join("\n");
 
-        (lines.len() > 0 && ONE_SIGNAL_IP_ADDRESSES.iter().any(|addr| lines[0].contains(addr)), stdout)
+        let count = if lines.is_empty() {
+            0
+        } else {
+            ONE_SIGNAL_IP_ADDRESSES.iter().map(|v| *v).filter(|addr| lines[0].contains(addr)).count()
+        };
+
+        (count, stdout)
     }
 
-    fn assert_onesignal_connection_open(expected_open: bool) {
-        let (open, stdout) = onesignal_connection_open();
-        assert_eq!(expected_open, open, "Output:\n{}", stdout);
+    macro_rules! assert_onesignal_connection_open_count_eq {
+        ($expected_open_count:expr) => {
+            let (open_count, stdout) = onesignal_connection_count();
+            assert_eq!($expected_open_count, open_count, "Output:\n{}", stdout);
+        };
     }
 
     #[test]
     fn keep_alive_works_as_expected() {
         // block until no connections are open - this is unfortunate..
         // but at least we have tests covering the keep-alive :)
-        while onesignal_connection_open().0 {}
+        while onesignal_connection_count().0 > 0 {}
 
         let _ = env_logger::try_init();
 
         let mut config = Config::default();
-        config.keep_alive_timeout = Duration::from_secs(2);
+        config.keep_alive_timeout = Duration::from_secs(3);
 
         let mut pool = Pool::new(config).unwrap();
         let (tx, rx) = mpsc::channel();
 
         // Start first request
-        pool.request(
-            Transaction::new(tx.clone(), Request::new(Method::Get, "https://onesignal.com/".parse().unwrap()))
-        ).expect("request ok");
+        pool.request(onesignal_transaction(tx.clone())).expect("request ok");
 
         // wait for request to finish
         rx.recv().unwrap();
-        assert_onesignal_connection_open(true);
-        thread::sleep(Duration::from_secs(2));
-        assert_onesignal_connection_open(true);
-        thread::sleep(Duration::from_secs(2));
-        assert_onesignal_connection_open(false);
+        assert_onesignal_connection_open_count_eq!(1);
+        thread::sleep(Duration::from_secs(1));
+        assert_onesignal_connection_open_count_eq!(1);
+
+        thread::sleep(Duration::from_secs(5));
+        // keep-alive should kill connection by now
+        assert_onesignal_connection_open_count_eq!(0);
     }
 }
