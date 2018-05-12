@@ -1,3 +1,4 @@
+#[cfg(test)] #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate log;
 
 extern crate fpool;
@@ -29,11 +30,19 @@ mod tests {
     use std::process::Command;
     use std::sync::{Arc, mpsc};
     use std::sync::atomic::{Ordering, AtomicUsize};
+    use std::sync::RwLock;
     use std::thread;
     use std::time::Duration;
 
     use hyper::{Request, Method};
     use super::*;
+
+    lazy_static! {
+        /// For tests that depend on global state (ahem - keep_alive_works_as_expected())
+        /// we have this test_lock which they can grab with a `write()` in order to ensure
+        /// no other tests in this file are running
+        static ref TEST_LOCK: RwLock<()> = RwLock::new(());
+    }
 
     impl Deliverable for mpsc::Sender<DeliveryResult> {
         fn complete(self, result: DeliveryResult) {
@@ -56,6 +65,8 @@ mod tests {
 
     #[test]
     fn lots_of_get_single_worker() {
+        let _read = TEST_LOCK.read().unwrap();
+
         let _ = env_logger::try_init();
 
         let mut config = Config::default();
@@ -97,6 +108,8 @@ mod tests {
 
     #[test]
     fn graceful_shutdown() {
+        let _read = TEST_LOCK.read().unwrap();
+
         let _ = env_logger::try_init();
 
         let txn = 20;
@@ -116,6 +129,8 @@ mod tests {
 
     #[test]
     fn full_error() {
+        let _read = TEST_LOCK.read().unwrap();
+
         let _ = env_logger::try_init();
 
         let mut config = Config::default();
@@ -151,16 +166,13 @@ mod tests {
             .expect("command works");
 
         let stdout = String::from_utf8(output.stdout).unwrap();
-        let lines : Vec<_> = stdout.split("\n").filter(|line| line.starts_with("hyper")).collect();
+        let lines : Vec<_> = stdout.split("\n").filter(|line| {
+            line.starts_with("hyper") &&
+                ONE_SIGNAL_IP_ADDRESSES.iter().any(|addr| line.contains(addr))
+        }).collect();
         let stdout = lines.join("\n");
 
-        let count = if lines.is_empty() {
-            0
-        } else {
-            ONE_SIGNAL_IP_ADDRESSES.iter().map(|v| *v).filter(|addr| lines[0].contains(addr)).count()
-        };
-
-        (count, stdout)
+        (lines.len(), stdout)
     }
 
     macro_rules! assert_onesignal_connection_open_count_eq {
@@ -172,6 +184,8 @@ mod tests {
 
     #[test]
     fn keep_alive_works_as_expected() {
+        let _write = TEST_LOCK.write().unwrap();
+
         // block until no connections are open - this is unfortunate..
         // but at least we have tests covering the keep-alive :)
         while onesignal_connection_count().0 > 0 {}
@@ -196,5 +210,29 @@ mod tests {
         thread::sleep(Duration::from_secs(5));
         // keep-alive should kill connection by now
         assert_onesignal_connection_open_count_eq!(0);
+    }
+
+    #[test]
+    fn timeout_works_as_expected() {
+        let _read = TEST_LOCK.read().unwrap();
+
+        let _ = env_logger::try_init();
+
+        let mut config = Config::default();
+        config.transaction_timeout = Duration::from_secs(2);
+
+        let mut pool = Pool::new(config).unwrap();
+        let (tx, rx) = mpsc::channel();
+
+        // Start first request
+        pool.request(
+            // This endpoint will not return for a while, therefore should timeout
+            Transaction::new(tx.clone(), Request::new(Method::Get, "https://httpstat.us/200?sleep=5000".parse().unwrap()))
+        ).expect("request ok");
+
+        match rx.recv().unwrap() {
+            DeliveryResult::Timeout { .. } => (), // ok
+            res => panic!("Expected timeout!, got: {:?}", res),
+        }
     }
 }

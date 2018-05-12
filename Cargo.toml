@@ -16,3 +16,4 @@ fpool = "0.2"
 
 [dev-dependencies]
 env_logger = "0.5"
+lazy_static = "1.0"
