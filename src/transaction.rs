@@ -11,8 +11,8 @@ use hyper::client::{Response, HttpConnector};
 use std::marker::PhantomData;
 use tokio_core::reactor::{Handle, Timeout};
 
-use counter::Counter;
 use deliverable::Deliverable;
+use raii_counter::Counter;
 
 /// The result of the transaction, a message sent to the
 /// deliverable.

@@ -13,6 +13,7 @@ hyper-tls = "0.1"
 futures = "0.1"
 tokio-core = "0.1"
 fpool = "0.2"
+raii-counter = "0.1"
 
 [dev-dependencies]
 env_logger = "0.5"

@@ -14,9 +14,9 @@ use native_tls::TlsConnector;
 use tokio_core::reactor::{Core, Handle};
 
 use config::Config;
-use counter::{Counter, WeakCounter};
 use deliverable::Deliverable;
 use error::{RequestError, SpawnError};
+use raii_counter::{Counter, WeakCounter};
 use transaction::Transaction;
 
 /// Lives on a separate thread and runs Transactions sent by Pool
@@ -53,7 +53,7 @@ impl<D: Deliverable> ExecutorHandle<D> {
             return Err(RequestError::Full(transaction));
         }
 
-        let package = ExecutorMessage::Transaction((transaction, self.transaction_counter.clone().upgrade()));
+        let package = ExecutorMessage::Transaction((transaction, self.transaction_counter.spawn_upgrade()));
         if let Err(err) = self.sender.unbounded_send(package) {
             match err.into_inner() {
                 ExecutorMessage::Transaction((transaction, _counter)) => {
@@ -72,15 +72,15 @@ impl<D: Deliverable> ExecutorHandle<D> {
     }
 
     fn is_full(&self) -> bool {
-        self.transaction_counter.get() >= self.max_transactions
+        self.transaction_counter.count() >= self.max_transactions
     }
 }
 
 impl<D: Deliverable> Executor<D> {
     pub fn spawn(config: &Config) -> Result<ExecutorHandle<D>, SpawnError> {
         let (tx, rx) = FuturesMpsc::unbounded();
-        let counter = Counter::new().downgrade();
-        let counter_clone = counter.clone();
+        let weak_counter = WeakCounter::new();
+        let weak_counter_clone = weak_counter.clone();
         let keep_alive_timeout = config.keep_alive_timeout;
         let dns_threads_per_worker = config.dns_threads_per_worker;
         let transaction_timeout = config.transaction_timeout.clone();
@@ -106,7 +106,7 @@ impl<D: Deliverable> Executor<D> {
                 let executor = Executor {
                     state: ExecutorState::Running(rx),
                     handle: handle,
-                    transaction_counter: counter_clone,
+                    transaction_counter: weak_counter_clone,
                     client,
                     transaction_timeout,
                 };
@@ -119,7 +119,7 @@ impl<D: Deliverable> Executor<D> {
             })
             .map(|join_handle| {
                 ExecutorHandle {
-                    transaction_counter: counter,
+                    transaction_counter: weak_counter,
                     max_transactions: config.max_transactions_per_worker,
                     sender: tx,
                     join_handle,
@@ -174,7 +174,7 @@ impl<D: Deliverable> Future for Executor<D> {
                     }
                 },
                 ExecutorState::Draining => {
-                    if self.transaction_counter.get() > 0 {
+                    if self.transaction_counter.count() > 0 {
                         ExecutorState::Draining
                     } else {
                         return Ok(Async::Ready(()));

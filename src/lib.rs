@@ -5,12 +5,12 @@ extern crate fpool;
 extern crate futures;
 extern crate hyper_tls;
 extern crate native_tls;
+extern crate raii_counter;
 extern crate tokio_core;
 
 pub extern crate hyper;
 
 mod config;
-mod counter;
 mod deliverable;
 mod error;
 mod executor;
