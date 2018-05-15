@@ -231,6 +231,9 @@ mod tests {
         let _ = env_logger::try_init();
 
         let mut config = Config::default();
+        // note that workers must be one otherwise the second transaction will be
+        // routed to another worker and a new connection will be established
+        config.workers = 1;
         config.keep_alive_timeout = Duration::from_secs(10);
 
         let mut pool = Pool::new(config).unwrap();

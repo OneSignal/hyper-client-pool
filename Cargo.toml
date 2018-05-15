@@ -18,6 +18,3 @@ raii-counter = "0.1"
 [dev-dependencies]
 env_logger = "0.5"
 lazy_static = "1.0"
-
-[replace]
-"tokio-core:0.1.17" = { git = "https://github.com/DarrenTsung/tokio-core", branch = "connection-reuse" }
