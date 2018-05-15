@@ -161,7 +161,7 @@ mod tests {
 
     fn onesignal_connection_count() -> (usize, String) {
         let output = Command::new("lsof")
-            .args(&["-i", "4tcp"])
+            .args(&["-i"])
             .output()
             .expect("command works");
 
