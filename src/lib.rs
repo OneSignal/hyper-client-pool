@@ -151,12 +151,20 @@ mod tests {
         rx.recv().unwrap();
     }
 
-    const ONE_SIGNAL_IP_ADDRESSES : [&'static str; 5] = [
+    const ONE_SIGNAL_IP_ADDRESSES : [&'static str; 10] = [
+        // IPv4 addresses
         "104.16.208.165",
         "104.16.204.165",
         "104.16.205.165",
         "104.16.207.165",
         "104.16.206.165",
+
+        // IPv6 addresses
+        "2400:cb00:2048:1::6810:cda5",
+        "2400:cb00:2048:1::6810:cca5",
+        "2400:cb00:2048:1::6810:cea5",
+        "2400:cb00:2048:1::6810:d0a5",
+        "2400:cb00:2048:1::6810:cfa5",
     ];
 
     fn onesignal_connection_count() -> (usize, String) {
