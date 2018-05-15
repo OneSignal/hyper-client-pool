@@ -70,7 +70,7 @@ mod tests {
         let _ = env_logger::try_init();
 
         let mut config = Config::default();
-        config.workers = 2;
+        config.workers = 1;
 
         let mut pool = Pool::new(config).unwrap();
         let (tx, rx) = mpsc::channel();
