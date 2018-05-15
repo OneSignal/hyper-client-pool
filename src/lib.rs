@@ -221,6 +221,40 @@ mod tests {
     }
 
     #[test]
+    fn connection_reuse_works_as_expected() {
+        let _write = TEST_LOCK.write().unwrap();
+
+        // block until no connections are open - this is unfortunate..
+        // but at least we have tests covering the keep-alive :)
+        while onesignal_connection_count().0 > 0 {}
+
+        let _ = env_logger::try_init();
+
+        let mut config = Config::default();
+        config.keep_alive_timeout = Duration::from_secs(10);
+
+        let mut pool = Pool::new(config).unwrap();
+        let (tx, rx) = mpsc::channel();
+
+        // Start first request
+        pool.request(onesignal_transaction(tx.clone())).expect("request ok");
+        // wait for request to finish
+        rx.recv().unwrap();
+
+        assert_onesignal_connection_open_count_eq!(1);
+        thread::sleep(Duration::from_secs(3));
+        assert_onesignal_connection_open_count_eq!(1);
+
+        // Start second request
+        pool.request(onesignal_transaction(tx.clone())).expect("request ok");
+        // wait for request to finish
+        rx.recv().unwrap();
+
+        // there should only be one connection open
+        assert_onesignal_connection_open_count_eq!(1);
+    }
+
+    #[test]
     fn timeout_works_as_expected() {
         let _read = TEST_LOCK.read().unwrap();
 
