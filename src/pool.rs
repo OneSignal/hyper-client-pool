@@ -54,7 +54,7 @@ impl<D: Deliverable> Pool<D> {
         count: usize
     ) -> Result<(), Error<D>> {
         if count == 0 {
-            return Err(Error::new(ErrorKind::Full, transaction));
+            return Err(Error::new(ErrorKind::PoolFull, transaction));
         }
 
         let transaction = match self.executor_handles.get() {
@@ -62,7 +62,7 @@ impl<D: Deliverable> Pool<D> {
             Ok(handle) => {
                 match handle.send(transaction) {
                     // Returning the transaction means that we will retry in next iteration
-                    Err(RequestError::Full(transaction)) => transaction,
+                    Err(RequestError::PoolFull(transaction)) => transaction,
                     Err(RequestError::FailedSend(transaction)) => {
                         // invalidate the thread as it didn't send
                         handle.invalidate();

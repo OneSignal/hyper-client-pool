@@ -146,7 +146,7 @@ mod tests {
         }
 
         match pool.request(onesignal_transaction(tx.clone())) {
-            Err(err) => assert_eq!(err.kind, ErrorKind::Full),
+            Err(err) => assert_eq!(err.kind, ErrorKind::PoolFull),
             _ => panic!("Expected Error, got success request!"),
         }
 

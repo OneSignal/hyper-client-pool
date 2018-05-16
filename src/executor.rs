@@ -50,7 +50,7 @@ type ExecutorMessage<D> = (Transaction<D>, Counter);
 impl<D: Deliverable> ExecutorHandle<D> {
     pub(crate) fn send(&mut self, transaction: Transaction<D>) -> Result<(), RequestError<D>> {
         if self.is_full() {
-            return Err(RequestError::Full(transaction));
+            return Err(RequestError::PoolFull(transaction));
         }
 
         if let Err(err) = self.sender.unbounded_send((transaction, self.transaction_counter.spawn_upgrade())) {

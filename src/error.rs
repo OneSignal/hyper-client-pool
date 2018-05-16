@@ -51,13 +51,13 @@ impl<D: Deliverable> Error<D> {
 pub enum ErrorKind {
     /// An error occurred when spawning and configuring a new thread for a hyper::Client
     Spawn(SpawnError),
-    /// There is no room for another transaction right now, the hyper::Client is full.
-    Full,
+    /// There is no room for another transaction right now, the pool is full.
+    PoolFull,
 }
 
 /// Type of errors that can occur when attempting to send a [`Transaction`]
 /// to an [`Executor`].
 pub(crate) enum RequestError<D: Deliverable> {
-    Full(Transaction<D>),
+    PoolFull(Transaction<D>),
     FailedSend(Transaction<D>),
 }
