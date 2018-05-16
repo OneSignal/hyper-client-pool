@@ -134,14 +134,16 @@ mod tests {
         let _ = env_logger::try_init();
 
         let mut config = Config::default();
-        config.workers = 1;
+        config.workers = 3;
         config.max_transactions_per_worker = 1;
 
         let mut pool = Pool::new(config).unwrap();
         let (tx, rx) = mpsc::channel();
 
-        // Start first request
-        pool.request(onesignal_transaction(tx.clone())).expect("request ok");
+        // Start requests
+        for _ in 0..3 {
+            pool.request(onesignal_transaction(tx.clone())).expect("request ok");
+        }
 
         match pool.request(onesignal_transaction(tx.clone())) {
             Err(err) => assert_eq!(err.kind, ErrorKind::Full),

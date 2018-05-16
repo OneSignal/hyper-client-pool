@@ -43,31 +43,37 @@ impl<D: Deliverable> Pool<D> {
     ///
     /// The request will be started immediately assuming one of the clients in
     /// this pool is not at max_sockets.
-    pub fn request(
+    pub fn request(&mut self, transaction: Transaction<D>) -> Result<(), Error<D>> {
+        let size = self.executor_handles.size();
+        self.request_inner(transaction, size)
+    }
+
+    fn request_inner(
         &mut self,
         transaction: Transaction<D>,
+        count: usize
     ) -> Result<(), Error<D>> {
-        match self.executor_handles.get() {
-            Err(spawn_err) => Err(Error::new(ErrorKind::Spawn(spawn_err), transaction)),
-            Ok(handle) => {
-                let (res, invalid) = match handle.send(transaction) {
-                    Err(RequestError::Full(transaction)) => {
-                        (Err(Error::new(ErrorKind::Full, transaction)), false)
-                    },
-                    Err(RequestError::FailedSend(transaction)) => {
-                        // Recreate the executor / thread if it failed to send
-                        (Err(Error::new(ErrorKind::FailedSend, transaction)), true)
-                    },
-                    _ => (Ok(()), false)
-                };
-
-                if invalid {
-                    handle.invalidate();
-                }
-
-                res
-            }
+        if count == 0 {
+            return Err(Error::new(ErrorKind::Full, transaction));
         }
+
+        let transaction = match self.executor_handles.get() {
+            Err(spawn_err) => return Err(Error::new(ErrorKind::Spawn(spawn_err), transaction)),
+            Ok(handle) => {
+                match handle.send(transaction) {
+                    // Returning the transaction means that we will retry in next iteration
+                    Err(RequestError::Full(transaction)) => transaction,
+                    Err(RequestError::FailedSend(transaction)) => {
+                        // invalidate the thread as it didn't send
+                        handle.invalidate();
+                        transaction
+                    },
+                    Ok(_) => return Ok(()),
+                }
+            }
+        };
+
+        self.request_inner(transaction, count - 1)
     }
 
     /// Shutdown the pool

@@ -49,9 +49,10 @@ impl<D: Deliverable> Error<D> {
 /// spawned if a previous one was lost / invalidated.
 #[derive(Debug, PartialEq)]
 pub enum ErrorKind {
+    /// An error occurred when spawning and configuring a new thread for a hyper::Client
     Spawn(SpawnError),
+    /// There is no room for another transaction right now, the hyper::Client is full.
     Full,
-    FailedSend,
 }
 
 /// Type of errors that can occur when attempting to send a [`Transaction`]
