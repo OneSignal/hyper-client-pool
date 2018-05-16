@@ -1,7 +1,9 @@
 #[macro_use] extern crate lazy_static;
+
 extern crate env_logger;
 extern crate hyper_client_pool;
 extern crate ipnet;
+extern crate regex;
 
 use std::net::IpAddr;
 use std::process::Command;
@@ -14,6 +16,7 @@ use std::time::Duration;
 use hyper_client_pool::*;
 use hyper::{Request, Method};
 use ipnet::{Contains, IpNet};
+use regex::Regex;
 
 lazy_static! {
     /// For tests that depend on global state (ahem - keep_alive_works_as_expected())
@@ -147,6 +150,7 @@ fn full_error() {
 }
 
 static CLOUDFLARE_NETS: &[&str] = &[
+    // IPv4
     "103.21.244.0/22",
     "103.22.200.0/22",
     "103.31.4.0/22",
@@ -161,6 +165,15 @@ static CLOUDFLARE_NETS: &[&str] = &[
     "190.93.240.0/20",
     "197.234.240.0/22",
     "198.41.128.0/17",
+
+    // IPv6
+    "2400:cb00::/32",
+    "2405:8100::/32",
+    "2405:b500::/32",
+    "2606:4700::/32",
+    "2803:f800::/32",
+    "2c0f:f248::/32",
+    "2a06:98c0::/29",
 ];
 
 lazy_static! {
@@ -169,28 +182,32 @@ lazy_static! {
             .map(|net| net.parse::<IpNet>())
             .collect::<Result<Vec<IpNet>, _>>().unwrap()
     };
+
+    static ref LSOF_PARSE_IP_REGEX: Regex = {
+        Regex::new(r"->\[?([^\]]*)\]?:https").unwrap()
+    };
 }
 
-fn in_cloudflare_nets(addr: &IpAddr) -> bool {
-    CLOUDFLARE_PARSED_NETS.iter().any(|net| net.contains(addr))
+fn matches_cloudflare_ip(input: &str) -> bool {
+    if let Some(captures) = LSOF_PARSE_IP_REGEX.captures(input) {
+        match captures[1].parse::<IpAddr>() {
+            Ok(addr) => CLOUDFLARE_PARSED_NETS.iter().any(|net| net.contains(&addr)),
+            Err(_err) => false,
+        }
+    } else {
+        false
+    }
 }
 
-    const ONE_SIGNAL_IP_ADDRESSES : [&'static str; 10] = [
-        // IPv4 addresses
-        "104.16.208.165",
-        "104.16.204.165",
-        "104.16.205.165",
-        "104.16.207.165",
-        "104.16.206.165",
-
-        // IPv6 addresses
-        "2400:cb00:2048:1::6810:cda5",
-        "2400:cb00:2048:1::6810:cca5",
-        "2400:cb00:2048:1::6810:cea5",
-        "2400:cb00:2048:1::6810:d0a5",
-        "2400:cb00:2048:1::6810:cfa5",
-    ];
-
+#[test]
+fn matches_cloudflare_ip_works_as_expected() {
+    // Test-case from staging
+    let input1 = "hyper_cli 29606 deploy    9u  IPv6 74567336      0t0  TCP onepush-test-darren:46286->[2400:cb00:2048:1::6810:cea5]:https (ESTABLISHED)";
+    assert_eq!(matches_cloudflare_ip(input1), true);
+    // test-case from personal mac
+    let input2 = "lib-f13ca 83600 darrentsung   12u  IPv4 0x2aad2644e2239ff9      0t0  TCP 192.168.2.240:54285->104.16.207.165:https (ESTABLISHED)";
+    assert_eq!(matches_cloudflare_ip(input2), true);
+}
 
 fn onesignal_connection_count() -> (usize, String) {
     let output = Command::new("lsof")
@@ -200,9 +217,9 @@ fn onesignal_connection_count() -> (usize, String) {
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines : Vec<_> = stdout.split("\n")
-    .filter(|line| {
-        ONE_SIGNAL_IP_ADDRESSES.iter().any(|addr| line.contains(addr))
-    }).collect();
+        .filter(|line| matches_cloudflare_ip(line))
+        .collect();
+
     let stdout = lines.join("\n");
 
     (lines.len(), stdout)
