@@ -44,6 +44,8 @@ pub enum DeliveryResult {
     },
 }
 
+/// A container type for a [`hyper::Request`] as well as the deliverable
+/// which receives the result of the request.
 pub struct Transaction<D: Deliverable> {
     deliverable: D,
     request: Request,

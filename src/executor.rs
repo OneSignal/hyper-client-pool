@@ -19,8 +19,9 @@ use error::{RequestError, SpawnError};
 use raii_counter::{Counter, WeakCounter};
 use transaction::Transaction;
 
-/// Lives on a separate thread and runs Transactions sent by Pool
-pub struct Executor<D: Deliverable> {
+/// Lives on a separate thread running a tokio_core::Reactor
+/// and runs Transactions sent by the Pool.
+pub(crate) struct Executor<D: Deliverable> {
     handle: Handle,
     client: Client<HttpsConnector<HttpConnector>>,
     transaction_counter: WeakCounter,
@@ -28,7 +29,9 @@ pub struct Executor<D: Deliverable> {
     state: ExecutorState<D>,
 }
 
-pub struct ExecutorHandle<D: Deliverable> {
+/// The handle to the Executor. It lives on the Pool thread
+/// and allows message passing through futures::mpsc.
+pub(crate) struct ExecutorHandle<D: Deliverable> {
     transaction_counter: WeakCounter,
     max_transactions: usize,
 
@@ -42,13 +45,14 @@ enum ExecutorState<D: Deliverable> {
     Finished,
 }
 
+// TODO (darren): instead of shutdown, drop handle should be enough
 enum ExecutorMessage<D: Deliverable> {
     Transaction((Transaction<D>, Counter)),
     Shutdown,
 }
 
 impl<D: Deliverable> ExecutorHandle<D> {
-    pub fn send(&mut self, transaction: Transaction<D>) -> Result<(), RequestError<D>> {
+    pub(crate) fn send(&mut self, transaction: Transaction<D>) -> Result<(), RequestError<D>> {
         if self.is_full() {
             return Err(RequestError::Full(transaction));
         }
@@ -66,7 +70,7 @@ impl<D: Deliverable> ExecutorHandle<D> {
         Ok(())
     }
 
-    pub fn send_shutdown(self) -> JoinHandle<()> {
+    pub(crate) fn send_shutdown(self) -> JoinHandle<()> {
         let _ = self.sender.unbounded_send(ExecutorMessage::Shutdown);
         self.join_handle
     }

@@ -3,27 +3,27 @@
 //! This module provides a simple API wrapping a pool of HTTP clients
 use std::cmp;
 
-use fpool::{ActResult, RoundRobinPool};
+use fpool::RoundRobinPool;
 
 use config::Config;
 use deliverable::Deliverable;
-use error::{SpawnError, RequestError, Error};
+use error::{SpawnError, ErrorKind, Error, RequestError};
 use executor::{Executor, ExecutorHandle};
 use transaction::Transaction;
 
-/// Pool of HTTP clients
+/// A pool of [`hyper::Client`]s.
 ///
 /// Manages a set of `hyper::Client` for maximizing throughput while presenting
 /// a `request` API similar to using a `hyper::Client` directly. The number of
-/// active transactions running on each client is tracked so that max sockets
-/// may be respected. When all clients are full, backpressure is provided in the
+/// active transactions running on each client is tracked so that max_transactions_per_worker
+/// is respected. When all clients are full, backpressure is provided in the
 /// form of an Error variant saying "busy; try again later".
 pub struct Pool<D: Deliverable> {
-    executor_handles: RoundRobinPool<ExecutorHandle<D>, Error<D>>,
+    executor_handles: RoundRobinPool<ExecutorHandle<D>, SpawnError>,
 }
 
 impl<D: Deliverable> Pool<D> {
-    /// Creat a new pool according to config
+    /// Create a new pool according to config
     pub fn new(mut config: Config) -> Result<Pool<D>, SpawnError> {
         // Make sure config.workers is a reasonable value
         let num_workers = cmp::max(1, config.workers);
@@ -31,15 +31,8 @@ impl<D: Deliverable> Pool<D> {
 
         let executor_handles = RoundRobinPool::builder(config.workers, move || {
                 Executor::spawn(&config)
-                    .map_err(|err| {
-                        match err {
-                            SpawnError::ThreadSpawn(err) => Error::ThreadSpawn(err),
-                            SpawnError::HttpsConnector(err) => Error::HttpsConnector(err),
-                        }
-                    })
             })
-            .build()
-            .map_err(SpawnError::convert)?;
+            .build()?;
 
         Ok(Pool {
             executor_handles,
@@ -53,19 +46,28 @@ impl<D: Deliverable> Pool<D> {
     pub fn request(
         &mut self,
         transaction: Transaction<D>,
-    ) -> Result<(), RequestError<D>> {
-        self.executor_handles.act(move |handle| {
-            match handle.send(transaction) {
-                Err(RequestError::Full(transaction)) => {
-                    ActResult::ValidWithError(Error::Full(transaction))
-                },
-                Err(RequestError::FailedSend(transaction)) => {
-                    // Recreate the executor / thread if it failed to send
-                    ActResult::InvalidWithError(Error::FailedSend(transaction))
-                },
-                _ => ActResult::Valid,
+    ) -> Result<(), Error<D>> {
+        match self.executor_handles.get() {
+            Err(spawn_err) => Err(Error::new(ErrorKind::Spawn(spawn_err), transaction)),
+            Ok(handle) => {
+                let (res, invalid) = match handle.send(transaction) {
+                    Err(RequestError::Full(transaction)) => {
+                        (Err(Error::new(ErrorKind::Full, transaction)), false)
+                    },
+                    Err(RequestError::FailedSend(transaction)) => {
+                        // Recreate the executor / thread if it failed to send
+                        (Err(Error::new(ErrorKind::FailedSend, transaction)), true)
+                    },
+                    _ => (Ok(()), false)
+                };
+
+                if invalid {
+                    handle.invalidate();
+                }
+
+                res
             }
-        }).map_err(RequestError::convert)
+        }
     }
 
     /// Shutdown the pool

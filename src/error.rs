@@ -5,42 +5,58 @@ use hyper_tls;
 use deliverable::Deliverable;
 use transaction::Transaction;
 
-#[derive(Debug)]
-pub enum Error<D: Deliverable> {
-    ThreadSpawn(io::Error),
-    HttpsConnector(hyper_tls::Error),
-    Full(Transaction<D>),
-    FailedSend(Transaction<D>),
-}
-
+/// Error when spawning and configuring the thread that the [`hyper::Client`]s run on.
 #[derive(Debug)]
 pub enum SpawnError {
     ThreadSpawn(io::Error),
     HttpsConnector(hyper_tls::Error),
 }
 
+impl PartialEq for SpawnError {
+    fn eq(&self, other: &SpawnError) -> bool {
+        match self {
+            SpawnError::ThreadSpawn(_err) => match other {
+                SpawnError::ThreadSpawn(_oerr) => true,
+                _ => false,
+            },
+            SpawnError::HttpsConnector(_err) => match other {
+                SpawnError::HttpsConnector(_oerr) => true,
+                _ => false,
+            },
+        }
+    }
+}
+
+/// An error returned when requesting a Transaction.
 #[derive(Debug)]
-pub enum RequestError<D: Deliverable> {
+pub struct Error<D: Deliverable> {
+    pub kind: ErrorKind,
+    transaction: Transaction<D>,
+}
+
+impl<D: Deliverable> Error<D> {
+    pub(crate) fn new(kind: ErrorKind, transaction: Transaction<D>) -> Error<D> {
+        Error { kind, transaction }
+    }
+
+    pub fn into_transaction(self) -> Transaction<D> {
+        self.transaction
+    }
+}
+
+/// Types of errors that can occur when requesting.
+/// A [`SpawnError`] can occur when requesting a Transaction as a new thread may need
+/// spawned if a previous one was lost / invalidated.
+#[derive(Debug, PartialEq)]
+pub enum ErrorKind {
+    Spawn(SpawnError),
+    Full,
+    FailedSend,
+}
+
+/// Type of errors that can occur when attempting to send a [`Transaction`]
+/// to an [`Executor`].
+pub(crate) enum RequestError<D: Deliverable> {
     Full(Transaction<D>),
     FailedSend(Transaction<D>),
-}
-
-impl SpawnError {
-    pub fn convert<D: Deliverable>(error: Error<D>) -> SpawnError {
-        match error {
-            Error::ThreadSpawn(err) => SpawnError::ThreadSpawn(err),
-            Error::HttpsConnector(err) => SpawnError::HttpsConnector(err),
-            _ => unreachable!(),
-        }
-    }
-}
-
-impl<D: Deliverable> RequestError<D> {
-    pub fn convert(error: Error<D>) -> RequestError<D> {
-        match error {
-            Error::Full(err) => RequestError::Full(err),
-            Error::FailedSend(err) => RequestError::FailedSend(err),
-            _ => unreachable!(),
-        }
-    }
 }

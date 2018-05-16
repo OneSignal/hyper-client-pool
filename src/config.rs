@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 #[derive(Clone)]
+/// Configuration for [`pool::Pool`].
 pub struct Config {
     /// How long to keep a connection alive before timing out
     pub keep_alive_timeout: Duration,

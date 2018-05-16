@@ -20,7 +20,7 @@ mod transaction;
 pub use deliverable::Deliverable;
 pub use transaction::{Transaction, DeliveryResult};
 pub use pool::Pool;
-pub use error::{RequestError, SpawnError};
+pub use error::{Error, ErrorKind, SpawnError};
 pub use config::Config;
 
 #[cfg(test)]
@@ -144,8 +144,8 @@ mod tests {
         pool.request(onesignal_transaction(tx.clone())).expect("request ok");
 
         match pool.request(onesignal_transaction(tx.clone())) {
-            Err(RequestError::Full(_transaction)) => (), // expected
-            res => panic!("Expected Error::Full, got {:?}", res),
+            Err(err) => assert_eq!(err.kind, ErrorKind::Full),
+            _ => panic!("Expected Error, got success request!"),
         }
 
         rx.recv().unwrap();
