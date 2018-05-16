@@ -45,11 +45,7 @@ enum ExecutorState<D: Deliverable> {
     Finished,
 }
 
-// TODO (darren): instead of shutdown, drop handle should be enough
-enum ExecutorMessage<D: Deliverable> {
-    Transaction((Transaction<D>, Counter)),
-    Shutdown,
-}
+type ExecutorMessage<D> = (Transaction<D>, Counter);
 
 impl<D: Deliverable> ExecutorHandle<D> {
     pub(crate) fn send(&mut self, transaction: Transaction<D>) -> Result<(), RequestError<D>> {
@@ -57,21 +53,16 @@ impl<D: Deliverable> ExecutorHandle<D> {
             return Err(RequestError::Full(transaction));
         }
 
-        let package = ExecutorMessage::Transaction((transaction, self.transaction_counter.spawn_upgrade()));
-        if let Err(err) = self.sender.unbounded_send(package) {
-            match err.into_inner() {
-                ExecutorMessage::Transaction((transaction, _counter)) => {
-                    return Err(RequestError::FailedSend(transaction));
-                },
-                _ => unreachable!(),
-            }
+        if let Err(err) = self.sender.unbounded_send((transaction, self.transaction_counter.spawn_upgrade())) {
+            let (transaction, _counter) = err.into_inner();
+            return Err(RequestError::FailedSend(transaction));
         }
 
         Ok(())
     }
 
-    pub(crate) fn send_shutdown(self) -> JoinHandle<()> {
-        let _ = self.sender.unbounded_send(ExecutorMessage::Shutdown);
+    pub(crate) fn shutdown(self) -> JoinHandle<()> {
+        drop(self.sender);
         self.join_handle
     }
 
@@ -148,32 +139,24 @@ impl<D: Deliverable> Future for Executor<D> {
                 ExecutorState::Running(mut receiver) => {
                     loop {
                         match receiver.poll() {
-                            Ok(Async::Ready(Some(msg))) => {
-                                match msg {
-                                    ExecutorMessage::Transaction((transaction, counter)) => {
-                                        info!("Executor: spawning transaction.");
+                            Ok(Async::Ready(Some((transaction, counter)))) => {
+                                info!("Executor: spawning transaction.");
 
-                                        transaction.spawn_request(
-                                            &self.client,
-                                            &self.handle,
-                                            self.transaction_timeout.clone(),
-                                            counter
-                                        );
-                                    },
-                                    ExecutorMessage::Shutdown => {
-                                        info!("Executor: received shutdown notice, shutting down..");
-                                        // There cannot be any other messages in the receiver queue
-                                        // because sending the shutdown drops the receiver
-                                        state_changed = true;
-                                        break ExecutorState::Draining;
-                                    },
-                                };
+                                transaction.spawn_request(
+                                    &self.client,
+                                    &self.handle,
+                                    self.transaction_timeout.clone(),
+                                    counter
+                                );
                             },
                             // No messages
                             Ok(Async::NotReady) => break ExecutorState::Running(receiver),
                             // All senders dropped or errored
                             // (shouldn't be possible with () error type), shutdown
-                            Ok(Async::Ready(None)) | Err(()) => break ExecutorState::Draining,
+                            Ok(Async::Ready(None)) | Err(()) => {
+                                state_changed = true;
+                                break ExecutorState::Draining
+                            },
                         }
                     }
                 },

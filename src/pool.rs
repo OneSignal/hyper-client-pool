@@ -76,7 +76,7 @@ impl<D: Deliverable> Pool<D> {
     pub fn shutdown(self) {
         let handles = self.executor_handles.into_items();
         let join_handles : Vec<_> = handles.into_iter()
-            .map(|handle| handle.send_shutdown())
+            .map(|handle| handle.shutdown())
             .collect();
 
         for join_handle in join_handles.into_iter() {
