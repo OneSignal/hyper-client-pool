@@ -62,6 +62,10 @@ struct SpawnedTransaction<D: Deliverable, W: Future>
     work: W,
     _counter: Counter,
     start_time: Instant,
+
+    /// Because we spawn this future from another task and need
+    /// to track its completion as part of ensuring all transactions
+    /// are finished, we store a reference to notify the origin task.
     task: Task,
 }
 
