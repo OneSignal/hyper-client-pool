@@ -8,7 +8,6 @@ use futures::task::Task;
 use hyper_tls::HttpsConnector;
 use hyper::{self, Request, Client};
 use hyper::client::{Response, HttpConnector};
-use std::marker::PhantomData;
 use tokio_core::reactor::{Handle, Timeout};
 
 use deliverable::Deliverable;
@@ -57,18 +56,16 @@ impl<D: Deliverable> fmt::Debug for Transaction<D> {
     }
 }
 
-struct SpawnedTransaction<D: Deliverable, W: Future, R: Future>
+struct SpawnedTransaction<D: Deliverable, W: Future>
 {
     deliverable: Option<D>,
     work: W,
     _counter: Counter,
     start_time: Instant,
     task: Task,
-
-    _r: PhantomData<R>,
 }
 
-impl<D: Deliverable, W: Future, R: Future> Drop for SpawnedTransaction<D, W, R> {
+impl<D: Deliverable, W: Future> Drop for SpawnedTransaction<D, W> {
     fn drop(&mut self) {
         trace!("Dropping transaction..");
         self.deliverable
@@ -79,7 +76,7 @@ impl<D: Deliverable, W: Future, R: Future> Drop for SpawnedTransaction<D, W, R> 
     }
 }
 
-impl<D, W, R> Future for SpawnedTransaction<D, W, R>
+impl<D, W, R> Future for SpawnedTransaction<D, W>
 where
     D: Deliverable,
     W: Future<
@@ -163,7 +160,13 @@ impl<D: Deliverable> Transaction<D> {
         }
     }
 
-    pub(crate) fn spawn_request(self, client: &Client<HttpsConnector<HttpConnector>>, handle: &Handle, timeout: Duration, counter: Counter) {
+    pub(crate) fn spawn_request(
+        self,
+        client: &Client<HttpsConnector<HttpConnector>>,
+        handle: &Handle,
+        timeout: Duration,
+        counter: Counter
+    ) {
         let Transaction { deliverable, request } = self;
         trace!("Spawning request: {:?}", request);
 
@@ -199,7 +202,6 @@ impl<D: Deliverable> Transaction<D> {
                     _counter: counter,
                     start_time,
                     task,
-                    _r: PhantomData,
                 });
             }
         }
