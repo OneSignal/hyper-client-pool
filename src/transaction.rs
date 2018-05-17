@@ -20,23 +20,28 @@ use raii_counter::Counter;
 /// in order to prevent data loss.
 #[derive(Debug)]
 pub enum DeliveryResult {
+    /// The delivery was dropped, unknown if it was sent or not.
     Dropped,
 
+    /// Received a response from the external server.
     Response {
         response: Response,
         body: Vec<u8>,
         duration: Duration,
     },
 
+    /// Failed to connect within the timeout limit.
     Timeout {
         duration: Duration,
     },
 
+    /// The timeout handling had an error.
     TimeoutError {
         error: io::Error,
         duration: Duration,
     },
 
+    /// Sending a request through hyper encountered an error.
     HyperError {
         error: hyper::Error,
         duration: Duration,
