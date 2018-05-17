@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use futures::{Poll, Future, Stream, Async};
 use futures::sync::mpsc as FuturesMpsc;
+use hyper_http_connector::HttpConnector;
 use hyper_tls::HttpsConnector;
 use hyper::{self, Client};
-use hyper::client::HttpConnector;
 use native_tls::TlsConnector;
 use tokio_core::reactor::{Core, Handle};
 
@@ -79,7 +79,6 @@ impl<D: Deliverable> Executor<D> {
         let weak_counter = WeakCounter::new();
         let weak_counter_clone = weak_counter.clone();
         let keep_alive_timeout = config.keep_alive_timeout;
-        let dns_threads_per_worker = config.dns_threads_per_worker;
         let transaction_timeout = config.transaction_timeout.clone();
 
         info!("Spawning Executor.");
@@ -91,7 +90,7 @@ impl<D: Deliverable> Executor<D> {
                 let mut core = Core::new().unwrap();
                 let handle = core.handle();
 
-                let mut http = HttpConnector::new(dns_threads_per_worker, &handle);
+                let mut http = HttpConnector::new(&handle);
                 http.enforce_http(false);
                 let connector = HttpsConnector::from((http, tls));
                 let client = hyper::Client::configure()

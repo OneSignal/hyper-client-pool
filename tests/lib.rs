@@ -40,7 +40,6 @@ fn default_config() -> Config {
         transaction_timeout: Duration::from_secs(10),
         max_transactions_per_worker: 1_000,
         workers: 2,
-        dns_threads_per_worker: 10,
     }
 }
 
@@ -59,7 +58,7 @@ fn assert_successful_result(result: DeliveryResult) {
 
 #[test]
 fn lots_of_get_single_worker() {
-    let _read = TEST_LOCK.read().unwrap();
+    let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
     let _ = env_logger::try_init();
 
@@ -102,7 +101,7 @@ impl Deliverable for SuccessfulCompletionCounter {
 
 #[test]
 fn graceful_shutdown() {
-    let _read = TEST_LOCK.read().unwrap();
+    let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
     let _ = env_logger::try_init();
 
@@ -123,7 +122,7 @@ fn graceful_shutdown() {
 
 #[test]
 fn full_error() {
-    let _read = TEST_LOCK.read().unwrap();
+    let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
     let _ = env_logger::try_init();
 
@@ -234,7 +233,7 @@ macro_rules! assert_onesignal_connection_open_count_eq {
 
 #[test]
 fn keep_alive_works_as_expected() {
-    let _write = TEST_LOCK.write().unwrap();
+    let _write = TEST_LOCK.write().unwrap_or_else(|e| e.into_inner());
 
     // block until no connections are open - this is unfortunate..
     // but at least we have tests covering the keep-alive :)
@@ -258,14 +257,14 @@ fn keep_alive_works_as_expected() {
     thread::sleep(Duration::from_secs(1));
     assert_onesignal_connection_open_count_eq!(1);
 
-    thread::sleep(Duration::from_secs(5));
+    thread::sleep(Duration::from_secs(7));
     // keep-alive should kill connection by now
     assert_onesignal_connection_open_count_eq!(0);
 }
 
 #[test]
 fn connection_reuse_works_as_expected() {
-    let _write = TEST_LOCK.write().unwrap();
+    let _write = TEST_LOCK.write().unwrap_or_else(|e| e.into_inner());
 
     // block until no connections are open - this is unfortunate..
     // but at least we have tests covering the keep-alive :)
@@ -302,7 +301,7 @@ fn connection_reuse_works_as_expected() {
 
 #[test]
 fn timeout_works_as_expected() {
-    let _read = TEST_LOCK.read().unwrap();
+    let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
     let _ = env_logger::try_init();
 

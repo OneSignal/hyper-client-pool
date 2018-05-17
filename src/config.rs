@@ -14,7 +14,4 @@ pub struct Config {
 
     /// Number of workers in the pool
     pub workers: usize,
-
-    /// Number of DNS threads per worker
-    pub dns_threads_per_worker: usize,
 }
