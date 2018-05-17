@@ -146,6 +146,8 @@ where
             .take()
             .map(|deliverable| {
                 deliverable.complete(delivery_result);
+                // Notify the origin task as it might be waiting on the
+                // completion of the transaction to finish draining.
                 self.task.notify();
             });
 
