@@ -61,10 +61,8 @@ impl<D: Deliverable> ExecutorHandle<D> {
         Ok(())
     }
 
+    /// Shutdowns the executor by dropping the sender, returns the JoinHandle to the thread.
     pub(crate) fn shutdown(self) -> JoinHandle<()> {
-        // We explicitly drop the sender here because that is how we indicate to the
-        // receiver that it should shutdown.
-        drop(self.sender);
         self.join_handle
     }
 
