@@ -39,7 +39,7 @@ impl<D: Deliverable> Error<D> {
         Error { kind, transaction }
     }
 
-    pub fn into_transaction(self) -> Transaction<D> {
+    pub fn into_inner(self) -> Transaction<D> {
         self.transaction
     }
 }
