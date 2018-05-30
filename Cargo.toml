@@ -6,11 +6,18 @@ description = "Pooled Hyper Async Clients"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-log = "0.3"
-
-[dependencies.hyper]
-git = "https://github.com/jwilm/hyper.git"
-branch = "better-errors"
+log = "0.4"
+hyper = "0.11"
+native-tls = "0.1"
+hyper-tls = "0.1"
+futures = "0.1"
+tokio-core = "0.1"
+fpool = "~0.3.1"
+raii-counter = "0.1"
+hyper-http-connector = { git = "https://github.com/DarrenTsung/hyper-http-connector.git", branch = "trust-dns-cache-resolver" }
 
 [dev-dependencies]
-env_logger = "0.3"
+env_logger = "0.5"
+lazy_static = "1.0"
+ipnet = "1.2"
+regex = "1.0"
