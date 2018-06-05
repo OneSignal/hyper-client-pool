@@ -5,10 +5,10 @@ use std::time::{Instant, Duration};
 use futures::{Stream, Poll, Async, Future, task};
 use futures::future::{self, Either};
 use futures::task::Task;
-use hyper_http_connector::HttpConnector;
 use hyper_tls::HttpsConnector;
 use hyper::{self, Request, Client};
 use hyper::client::{Response};
+use hyper::client::HttpConnector;
 use tokio_core::reactor::{Handle, Timeout};
 
 use deliverable::Deliverable;
@@ -224,9 +224,9 @@ impl<D: Deliverable> Transaction<D> {
 mod tests {
     extern crate env_logger;
 
-    use hyper_http_connector::HttpConnector;
     use hyper_tls::HttpsConnector;
     use hyper;
+    use hyper::client::HttpConnector;
     use native_tls::TlsConnector;
     use std::sync::Arc;
     use std::sync::atomic::{Ordering, AtomicUsize};
@@ -292,7 +292,7 @@ mod tests {
 
     fn test_hyper_client(handle: &Handle) -> hyper::Client<HttpsConnector<HttpConnector>> {
         let tls = TlsConnector::builder().and_then(|builder| builder.build()).unwrap();
-        let mut http = HttpConnector::new(&handle);
+        let mut http = HttpConnector::new(4, &handle);
         http.enforce_http(false);
         let connector = HttpsConnector::from((http, tls));
         hyper::Client::configure()
