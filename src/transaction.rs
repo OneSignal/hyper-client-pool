@@ -27,7 +27,7 @@ pub enum DeliveryResult {
     /// Received a response from the external server.
     Response {
         response: Response,
-        body: Vec<u8>,
+        body: Option<Vec<u8>>,
         duration: Duration,
     },
 
@@ -54,6 +54,7 @@ pub enum DeliveryResult {
 pub struct Transaction<D: Deliverable> {
     deliverable: D,
     request: Request,
+    requires_body: bool,
 }
 
 impl<D: Deliverable> fmt::Debug for Transaction<D> {
@@ -90,11 +91,11 @@ impl<D, W, R> Future for SpawnedTransaction<D, W>
 where
     D: Deliverable,
     W: Future<
-        Item=Either<((Response, Vec<u8>), Timeout), ((), R)>,
+        Item=Either<((Response, Option<Vec<u8>>), Timeout), ((), R)>,
         Error=Either<(hyper::Error, Timeout), (io::Error, R)>
     >,
     R: Future<
-        Item=(Response, Vec<u8>),
+        Item=(Response, Option<Vec<u8>>),
         Error=hyper::Error,
     >,
 {
@@ -165,10 +166,12 @@ impl<D: Deliverable> Transaction<D> {
     pub fn new(
         deliverable: D,
         request: Request,
+        requires_body: bool,
     ) -> Transaction<D> {
         Transaction {
             deliverable,
             request,
+            requires_body,
         }
     }
 
@@ -179,22 +182,26 @@ impl<D: Deliverable> Transaction<D> {
         timeout: Duration,
         counter: Counter
     ) {
-        let Transaction { deliverable, request } = self;
+        let Transaction { deliverable, request, requires_body } = self;
         trace!("Spawning request: {:?}", request);
 
         let task = task::current();
         let request_future = client.request(request)
-            .and_then(|response| {
-                let status = response.status();
-                let headers = response.headers().clone();
-                response.body()
-                    .fold(Vec::new(), |mut acc, chunk| {
-                        acc.extend_from_slice(&*chunk);
-                        future::ok::<_, hyper::Error>(acc)
-                    })
-                    .map(move |body| {
-                        (Response::new().with_status(status).with_headers(headers), body)
-                    })
+            .and_then(move |response| -> Box<Future<Item=(Response, Option<Vec<u8>>), Error=hyper::Error>> {
+                if requires_body {
+                    let status = response.status();
+                    let headers = response.headers().clone();
+                    Box::new(response.body()
+                        .fold(Vec::new(), |mut acc, chunk| {
+                            acc.extend_from_slice(&*chunk);
+                            future::ok::<_, hyper::Error>(acc)
+                        })
+                        .map(move |body| {
+                            (Response::new().with_status(status).with_headers(headers), Some(body))
+                        }))
+                } else {
+                    Box::new(future::ok::<_, hyper::Error>((response, None)))
+                }
             });
 
         let start_time = Instant::now();
@@ -282,7 +289,11 @@ mod tests {
 
         fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
             for _ in 0..TRANSACTION_SPAWN_COUNT {
-                let transaction = Transaction::new(self.counter.clone(), Request::new(Method::Get, "https://onesignal.com/".parse().unwrap()));
+                let transaction = Transaction::new(
+                    self.counter.clone(),
+                    Request::new(Method::Get, "https://onesignal.com/".parse().unwrap()),
+                    false,
+                );
                 transaction.spawn_request(&self.client, &self.handle, Duration::from_secs(10), Counter::new());
             }
 

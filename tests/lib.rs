@@ -44,7 +44,11 @@ fn default_config() -> Config {
 }
 
 fn onesignal_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
-    Transaction::new(deliverable, Request::new(Method::Get, "https://onesignal.com/".parse().unwrap()))
+    Transaction::new(
+        deliverable,
+        Request::new(Method::Get, "https://onesignal.com/".parse().unwrap()),
+        false,
+    )
 }
 
 fn assert_successful_result(result: DeliveryResult) {
@@ -57,7 +61,7 @@ fn assert_successful_result(result: DeliveryResult) {
 }
 
 #[test]
-fn lots_of_get_single_worker() {
+fn some_gets_single_worker() {
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
     let _ = env_logger::try_init();
@@ -73,6 +77,28 @@ fn lots_of_get_single_worker() {
     }
 
     for _ in 0..5 {
+        assert_successful_result(rx.recv().unwrap());
+    }
+}
+
+#[test]
+fn a_ton_of_gets_single_worker() {
+    let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
+
+    let _ = env_logger::try_init();
+
+    let mut config = default_config();
+    config.transaction_timeout = Duration::from_secs(60);
+    config.workers = 4;
+
+    let mut pool = Pool::new(config).unwrap();
+    let (tx, rx) = mpsc::channel();
+
+    for _ in 0..2000 {
+        pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
+    }
+
+    for _ in 0..2000 {
         assert_successful_result(rx.recv().unwrap());
     }
 }
@@ -314,7 +340,11 @@ fn timeout_works_as_expected() {
     // Start first request
     pool.request(
         // This endpoint will not return for a while, therefore should timeout
-        Transaction::new(MspcDeliverable(tx.clone()), Request::new(Method::Get, "https://httpstat.us/200?sleep=5000".parse().unwrap()))
+        Transaction::new(
+            MspcDeliverable(tx.clone()),
+            Request::new(Method::Get, "https://httpstat.us/200?sleep=5000".parse().unwrap()),
+            false,
+        )
     ).expect("request ok");
 
     match rx.recv().unwrap() {
