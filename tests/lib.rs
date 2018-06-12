@@ -88,6 +88,8 @@ fn some_gets_single_worker() {
     }
 }
 
+/// This test is useful for profiling performance, but not a good
+/// test to run everytime as it may spuriously fail some requests
 #[test]
 #[ignore]
 fn ton_of_gets() {
