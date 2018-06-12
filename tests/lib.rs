@@ -11,10 +11,10 @@ use std::sync::{Arc, mpsc};
 use std::sync::atomic::{Ordering, AtomicUsize};
 use std::sync::RwLock;
 use std::thread;
-use std::time::Duration;
+use std::time::{Instant, Duration};
 
 use hyper_client_pool::*;
-use hyper::{Request, Method};
+use hyper::{Request, Body};
 use ipnet::{Contains, IpNet};
 use regex::Regex;
 
@@ -37,7 +37,8 @@ impl Deliverable for MspcDeliverable {
 fn default_config() -> Config {
     Config {
         keep_alive_timeout: Duration::from_secs(3),
-        transaction_timeout: Duration::from_secs(10),
+        transaction_timeout: Duration::from_secs(20),
+        dns_threads_per_worker: 1,
         max_transactions_per_worker: 1_000,
         workers: 2,
     }
@@ -46,7 +47,7 @@ fn default_config() -> Config {
 fn onesignal_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
     Transaction::new(
         deliverable,
-        Request::new(Method::Get, "https://onesignal.com/".parse().unwrap()),
+        Request::get("https://onesignal.com/").body(Body::empty()).unwrap(),
         false,
     )
 }
@@ -77,28 +78,6 @@ fn some_gets_single_worker() {
     }
 
     for _ in 0..5 {
-        assert_successful_result(rx.recv().unwrap());
-    }
-}
-
-#[test]
-fn a_ton_of_gets_single_worker() {
-    let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
-
-    let _ = env_logger::try_init();
-
-    let mut config = default_config();
-    config.transaction_timeout = Duration::from_secs(60);
-    config.workers = 4;
-
-    let mut pool = Pool::new(config).unwrap();
-    let (tx, rx) = mpsc::channel();
-
-    for _ in 0..2000 {
-        pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
-    }
-
-    for _ in 0..2000 {
         assert_successful_result(rx.recv().unwrap());
     }
 }
@@ -241,13 +220,11 @@ fn onesignal_connection_count() -> (usize, String) {
         .expect("command works");
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let lines : Vec<_> = stdout.split("\n")
+    let matching_lines = stdout.split("\n")
         .filter(|line| matches_cloudflare_ip(line))
-        .collect();
+        .count();
 
-    let stdout = lines.join("\n");
-
-    (lines.len(), stdout)
+    (matching_lines, stdout)
 }
 
 macro_rules! assert_onesignal_connection_open_count_eq {
@@ -278,14 +255,18 @@ fn keep_alive_works_as_expected() {
 
     // wait for request to finish
     assert_successful_result(rx.recv().unwrap());
-    thread::sleep(Duration::from_secs(1));
-    assert_onesignal_connection_open_count_eq!(1);
-    thread::sleep(Duration::from_secs(1));
-    assert_onesignal_connection_open_count_eq!(1);
-
-    thread::sleep(Duration::from_secs(7));
-    // keep-alive should kill connection by now
-    assert_onesignal_connection_open_count_eq!(0);
+    let start = Instant::now();
+    loop {
+        let seconds_elapsed = start.elapsed().as_secs();
+        if seconds_elapsed < 2 {
+            assert_onesignal_connection_open_count_eq!(1);
+        } else if seconds_elapsed > 3 {
+            // keep-alive should kill connection by now
+            assert_onesignal_connection_open_count_eq!(0);
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 #[test]
@@ -342,7 +323,7 @@ fn timeout_works_as_expected() {
         // This endpoint will not return for a while, therefore should timeout
         Transaction::new(
             MspcDeliverable(tx.clone()),
-            Request::new(Method::Get, "https://httpstat.us/200?sleep=5000".parse().unwrap()),
+            Request::get("https://httpstat.us/200?sleep=5000").body(Body::empty()).unwrap(),
             false,
         )
     ).expect("request ok");

@@ -11,7 +11,7 @@ use hyper_http_connector::HttpConnector;
 use hyper_tls::HttpsConnector;
 use hyper::{self, Client};
 use native_tls::TlsConnector;
-use tokio_core::reactor::{Core, Handle};
+use tokio::runtime::current_thread::{Handle, Runtime};
 
 use config::Config;
 use deliverable::Deliverable;
@@ -22,8 +22,8 @@ use transaction::Transaction;
 /// Lives on a separate thread running a tokio_core::Reactor
 /// and runs Transactions sent by the Pool.
 pub(crate) struct Executor<D: Deliverable> {
-    handle: Handle,
     client: Client<HttpsConnector<HttpConnector>>,
+    handle: Handle,
     transaction_counter: WeakCounter,
     transaction_timeout: Duration,
     state: ExecutorState<D>,
@@ -78,6 +78,7 @@ impl<D: Deliverable> Executor<D> {
         let weak_counter_clone = weak_counter.clone();
         let keep_alive_timeout = config.keep_alive_timeout;
         let transaction_timeout = config.transaction_timeout.clone();
+        let dns_threads_per_worker = config.dns_threads_per_worker;
 
         info!("Spawning Executor.");
         let tls = TlsConnector::builder().and_then(|builder| builder.build()).map_err(SpawnError::HttpsConnector)?;
@@ -85,27 +86,27 @@ impl<D: Deliverable> Executor<D> {
         thread::Builder::new()
             .name(format!("Hyper-Client-Pool Executor"))
             .spawn(move || {
-                let mut core = Core::new().unwrap();
-                let handle = core.handle();
+                let mut runtime = Runtime::new().expect("Able to create current_thread::Runtime");
+                let handle = runtime.handle();
 
-                let mut http = HttpConnector::new(&handle);
+                let mut http = HttpConnector::new(dns_threads_per_worker);
                 http.enforce_http(false);
+                http.set_keepalive(Some(keep_alive_timeout));
                 let connector = HttpsConnector::from((http, tls));
-                let client = hyper::Client::configure()
-                    .connector(connector)
+                let client = hyper::Client::builder()
                     .keep_alive(true)
                     .keep_alive_timeout(Some(keep_alive_timeout))
-                    .build(&handle);
+                    .build(connector);
 
                 let executor = Executor {
                     state: ExecutorState::Running(rx),
-                    handle: handle,
+                    handle,
                     transaction_counter: weak_counter_clone,
                     client,
                     transaction_timeout,
                 };
 
-                if let Err(err) = core.run(executor) {
+                if let Err(err) = runtime.block_on(executor) {
                     warn!("Error when running Executor: {:?}", err);
                 }
 

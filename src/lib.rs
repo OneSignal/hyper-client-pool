@@ -6,7 +6,7 @@ extern crate hyper_http_connector;
 extern crate hyper_tls;
 extern crate native_tls;
 extern crate raii_counter;
-extern crate tokio_core;
+extern crate tokio;
 
 pub extern crate hyper;
 

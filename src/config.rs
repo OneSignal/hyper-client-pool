@@ -9,6 +9,9 @@ pub struct Config {
     /// Transaction timeout (in seconds)
     pub transaction_timeout: Duration,
 
+    /// Number of DNS threads per worker
+    pub dns_threads_per_worker: usize,
+
     /// Max transactions per worker spawned
     pub max_transactions_per_worker: usize,
 

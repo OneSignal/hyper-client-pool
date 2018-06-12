@@ -7,14 +7,14 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 log = "0.4"
-hyper = "0.11"
+hyper = "0.12"
 native-tls = "0.1"
-hyper-tls = "0.1"
+hyper-tls = "0.2"
 futures = "0.1"
-tokio-core = "0.1"
+tokio = "0.1"
 fpool = "~0.3.1"
 raii-counter = "0.1"
-hyper-http-connector = { git = "https://github.com/DarrenTsung/hyper-http-connector.git", branch = "trust-dns-cache-resolver" }
+hyper-http-connector = { git = "https://github.com/DarrenTsung/hyper-http-connector.git", branch = "trust-dns/hyper-0.12/cpu-threadpool" }
 
 [dev-dependencies]
 env_logger = "0.5"
