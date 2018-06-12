@@ -52,13 +52,19 @@ fn onesignal_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
     )
 }
 
-fn assert_successful_result(result: DeliveryResult) {
-    match result {
-        DeliveryResult::Response { response, .. } => {
-            assert!(response.status().is_success(), format!("Expected successful response: {:?}", response.status()));
+fn check_successful_result(result: DeliveryResult) -> (bool, DeliveryResult) {
+    let successful = match result {
+        DeliveryResult::Response { ref response, .. } => {
+            response.status().is_success()
         },
-        res => panic!("Expected DeliveryResult::Response, unexpected delivery result: {:?}", res),
-    }
+        _ => false
+    };
+    (successful, result)
+}
+
+fn assert_successful_result(result: DeliveryResult) {
+    let (successful, result) = check_successful_result(result);
+    assert_eq!(true, successful, "Not successful result: {:?}!", result);
 }
 
 #[test]
@@ -80,6 +86,39 @@ fn some_gets_single_worker() {
     for _ in 0..5 {
         assert_successful_result(rx.recv().unwrap());
     }
+}
+
+#[test]
+#[ignore]
+fn ton_of_gets() {
+    let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
+
+    let _ = env_logger::try_init();
+
+    let mut config = default_config();
+    config.dns_threads_per_worker = 4;
+    config.workers = 4;
+    config.transaction_timeout = Duration::from_secs(60);
+
+    let mut pool = Pool::new(config).unwrap();
+    let (tx, rx) = mpsc::channel();
+
+    for _ in 0..2000 {
+        pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
+    }
+
+    let mut successes = 0;
+    let mut not_successes = 0;
+    for _ in 0..2000 {
+        let (successful, _result) = check_successful_result(rx.recv().unwrap());
+        if successful {
+            successes += 1;
+        } else {
+            not_successes += 1;
+        }
+    }
+
+    println!("Successes: {} | Not Successes: {}", successes, not_successes);
 }
 
 #[derive(Debug, Clone)]
