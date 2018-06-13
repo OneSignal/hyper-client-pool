@@ -2,8 +2,7 @@ use std::fmt;
 use std::time::{Instant, Duration};
 use std::io::{self, ErrorKind};
 
-use futures::{Stream, Poll, Async, Future, task};
-use futures::future;
+use futures::{Poll, Async, Future, task};
 use futures::task::Task;
 use hyper_http_connector::HttpConnector;
 use hyper_tls::HttpsConnector;
@@ -14,6 +13,7 @@ use tokio::runtime::current_thread::Handle;
 
 use deliverable::Deliverable;
 use raii_counter::Counter;
+use body_type::ResponseBodyType;
 
 /// The result of the transaction, a message sent to the
 /// deliverable.
@@ -21,14 +21,14 @@ use raii_counter::Counter;
 /// This must be sent to the deliverable in any case
 /// in order to prevent data loss.
 #[derive(Debug)]
-pub enum DeliveryResult {
+pub enum DeliveryResult<B> {
     /// The delivery was dropped, unknown if it was sent or not.
     Dropped,
 
     /// Received a response from the external server.
     Response {
         response: Response<Body>,
-        body: Option<Vec<u8>>,
+        body: B,
         duration: Duration,
     },
 
@@ -55,7 +55,6 @@ pub enum DeliveryResult {
 pub struct Transaction<D: Deliverable> {
     deliverable: D,
     request: Request<Body>,
-    requires_body: bool,
 }
 
 impl<D: Deliverable> fmt::Debug for Transaction<D> {
@@ -92,7 +91,7 @@ impl<D, W> Future for SpawnedTransaction<D, W>
 where
     D: Deliverable,
     W: Future<
-        Item=(Response<Body>, Option<Vec<u8>>),
+        Item=(Response<Body>, D::BodyType),
         Error=DeadlineError<hyper::Error>,
     >,
 {
@@ -154,12 +153,10 @@ impl<D: Deliverable> Transaction<D> {
     pub fn new(
         deliverable: D,
         request: Request<Body>,
-        requires_body: bool,
     ) -> Transaction<D> {
         Transaction {
             deliverable,
             request,
-            requires_body,
         }
     }
 
@@ -170,38 +167,18 @@ impl<D: Deliverable> Transaction<D> {
         timeout: Duration,
         counter: Counter
     ) {
-        let Transaction { deliverable, request, requires_body } = self;
+        let Transaction { deliverable, request } = self;
         trace!("Spawning request: {:?}", request);
 
         let start_time = Instant::now();
         let task = task::current();
         let request_future = client.request(request)
-            .and_then(move |response| -> Box<Future<Item=(Response<Body>, Option<Vec<u8>>), Error=hyper::Error> + Send> {
-                if requires_body {
-                    let (parts, body) = response.into_parts();
-                    Box::new(
-                        body
-                        .fold(Vec::new(), |mut acc, chunk| {
-                            acc.extend_from_slice(&*chunk);
-                            future::ok::<_, hyper::Error>(acc)
-                        })
-                        .map(move |body| {
-                            (Response::from_parts(parts, Body::empty()), Some(body))
-                        })
-                    )
-                } else {
-                    // Note that you must consume the body if you want keepalive
-                    // to take affect.
-                    let (parts, body) = response.into_parts();
-                    Box::new(
-                        body
-                        .skip_while(|_| future::ok(true))
-                        .collect()
-                        .map(|_| {
-                            (Response::from_parts(parts, Body::empty()), None)
-                        })
-                    )
-                }
+            .and_then(move |response| {
+                let (parts, body) = response.into_parts();
+                D::BodyType::wrap(body)
+                    .map(|body_output| {
+                        (Response::from_parts(parts, Body::empty()), body_output)
+                    })
             });
 
         let deadline = Instant::now() + timeout;
@@ -262,7 +239,9 @@ mod tests {
     }
 
     impl Deliverable for DeliveryCounter {
-        fn complete(self, result: DeliveryResult) {
+        type BodyType = ();
+
+        fn complete(self, result: DeliveryResult<()>) {
             if let DeliveryResult::Response { .. } = result {
                 self.response_count.fetch_add(1, Ordering::AcqRel);
             }
@@ -287,7 +266,6 @@ mod tests {
                 let transaction = Transaction::new(
                     self.counter.clone(),
                     Request::get("https://onesignal.com/").body(Body::empty()).unwrap(),
-                    false,
                 );
                 transaction.spawn_request(&self.client, &self.handle, Duration::from_secs(10), Counter::new());
             }

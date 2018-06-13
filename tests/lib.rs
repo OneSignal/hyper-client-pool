@@ -26,10 +26,12 @@ lazy_static! {
 }
 
 #[derive(Debug)]
-struct MspcDeliverable(mpsc::Sender<DeliveryResult>);
+struct MspcDeliverable(mpsc::Sender<DeliveryResult<()>>);
 
 impl Deliverable for MspcDeliverable {
-    fn complete(self, result: DeliveryResult) {
+    type BodyType = ();
+
+    fn complete(self, result: DeliveryResult<()>) {
         let _ = self.0.send(result);
     }
 }
@@ -48,11 +50,10 @@ fn onesignal_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
     Transaction::new(
         deliverable,
         Request::get("https://onesignal.com/").body(Body::empty()).unwrap(),
-        false,
     )
 }
 
-fn check_successful_result(result: DeliveryResult) -> (bool, DeliveryResult) {
+fn check_successful_result(result: DeliveryResult<()>) -> (bool, DeliveryResult<()>) {
     let successful = match result {
         DeliveryResult::Response { ref response, .. } => {
             response.status().is_success()
@@ -62,7 +63,7 @@ fn check_successful_result(result: DeliveryResult) -> (bool, DeliveryResult) {
     (successful, result)
 }
 
-fn assert_successful_result(result: DeliveryResult) {
+fn assert_successful_result(result: DeliveryResult<()>) {
     let (successful, result) = check_successful_result(result);
     assert_eq!(true, successful, "Not successful result: {:?}!", result);
 }
@@ -139,7 +140,9 @@ impl SuccessfulCompletionCounter {
 }
 
 impl Deliverable for SuccessfulCompletionCounter {
-    fn complete(self, result: DeliveryResult) {
+    type BodyType = ();
+
+    fn complete(self, result: DeliveryResult<()>) {
         assert_successful_result(result);
         self.count.fetch_add(1, Ordering::AcqRel);
     }
@@ -365,7 +368,6 @@ fn timeout_works_as_expected() {
         Transaction::new(
             MspcDeliverable(tx.clone()),
             Request::get("https://httpstat.us/200?sleep=5000").body(Body::empty()).unwrap(),
-            false,
         )
     ).expect("request ok");
 
