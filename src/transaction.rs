@@ -1,5 +1,6 @@
 use std::fmt;
 use std::time::{Instant, Duration};
+use std::io::{self, ErrorKind};
 
 use futures::{Stream, Poll, Async, Future, task};
 use futures::future;
@@ -10,7 +11,6 @@ use hyper::{self, Request, Client};
 use hyper::{Body, Response};
 use tokio::timer::{Deadline, DeadlineError};
 use tokio::runtime::current_thread::Handle;
-use tokio;
 
 use deliverable::Deliverable;
 use raii_counter::Counter;
@@ -39,7 +39,7 @@ pub enum DeliveryResult {
 
     /// The timeout handling had an error.
     TimeoutError {
-        error: tokio::timer::Error,
+        error: io::Error,
         duration: Duration,
     },
 
@@ -108,7 +108,7 @@ where
                     let timer_error = deadline_error.into_timer().expect("is_timer -> into_timer");
                     trace!("Timer around Transaction errored, error: {:?}, duration: {:?}", timer_error, duration);
                     DeliveryResult::TimeoutError {
-                        error: timer_error,
+                        error: io::Error::new(ErrorKind::Other, timer_error),
                         duration,
                     }
                 } else if deadline_error.is_elapsed() {
