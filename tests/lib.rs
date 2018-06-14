@@ -94,6 +94,8 @@ fn some_gets_single_worker() {
     for _ in 0..5 {
         assert_successful_result(rx.recv().unwrap());
     }
+
+    pool.shutdown();
 }
 
 /// This test is useful for profiling performance, but not a good
@@ -129,6 +131,7 @@ fn ton_of_gets() {
         }
     }
 
+    pool.shutdown();
     println!("Successes: {} | Not Successes: {}", successes, not_successes);
 }
 
@@ -201,6 +204,8 @@ fn full_error() {
     for _ in 0..3 {
         assert_successful_result(rx.recv().unwrap());
     }
+
+    pool.shutdown();
 }
 
 static CLOUDFLARE_NETS: &[&str] = &[
@@ -317,6 +322,8 @@ fn keep_alive_works_as_expected() {
         }
         thread::sleep(Duration::from_millis(100));
     }
+
+    pool.shutdown();
 }
 
 #[test]
@@ -354,6 +361,8 @@ fn connection_reuse_works_as_expected() {
 
     // there should only be one connection open
     assert_onesignal_connection_open_count_eq!(1);
+
+    pool.shutdown();
 }
 
 #[test]
@@ -382,4 +391,6 @@ fn timeout_works_as_expected() {
         DeliveryResult::Timeout { .. } => (), // ok
         res => panic!("Expected timeout!, got: {:?}", res),
     }
+
+    pool.shutdown();
 }

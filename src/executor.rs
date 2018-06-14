@@ -80,7 +80,6 @@ impl<D: Deliverable> Executor<D> {
         let transaction_timeout = config.transaction_timeout.clone();
         let dns_threads_per_worker = config.dns_threads_per_worker;
 
-        info!("Spawning Executor.");
         let tls = TlsConnector::builder().and_then(|builder| builder.build()).map_err(SpawnError::HttpsConnector)?;
 
         thread::Builder::new()
@@ -140,7 +139,7 @@ impl<D: Deliverable> Future for Executor<D> {
                     loop {
                         match receiver.poll() {
                             Ok(Async::Ready(Some((transaction, counter)))) => {
-                                info!("Executor: spawning transaction.");
+                                trace!("Executor: spawning transaction.");
 
                                 transaction.spawn_request(
                                     &self.client,
