@@ -56,7 +56,7 @@ fn onesignal_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
 fn httpbin_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
     Transaction::new(
         deliverable,
-        Request::get("https://www.httpbin.org/").body(Body::empty()).unwrap(),
+        Request::get("http://httpbin:80/ip").body(Body::empty()).unwrap(),
         false,
     )
 }
