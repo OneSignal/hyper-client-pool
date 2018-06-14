@@ -52,6 +52,14 @@ fn onesignal_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
     )
 }
 
+fn httpbin_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
+    Transaction::new(
+        deliverable,
+        Request::get("https://www.httpbin.org/").body(Body::empty()).unwrap(),
+        false,
+    )
+}
+
 fn check_successful_result(result: DeliveryResult) -> (bool, DeliveryResult) {
     let successful = match result {
         DeliveryResult::Response { ref response, .. } => {
@@ -100,18 +108,19 @@ fn ton_of_gets() {
     let mut config = default_config();
     config.dns_threads_per_worker = 4;
     config.workers = 4;
+    config.max_transactions_per_worker = 1_000;
     config.transaction_timeout = Duration::from_secs(60);
 
     let mut pool = Pool::new(config).unwrap();
     let (tx, rx) = mpsc::channel();
 
-    for _ in 0..2000 {
-        pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
+    for _ in 0..600 {
+        pool.request(httpbin_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
     }
 
     let mut successes = 0;
     let mut not_successes = 0;
-    for _ in 0..2000 {
+    for _ in 0..600 {
         let (successful, _result) = check_successful_result(rx.recv().unwrap());
         if successful {
             successes += 1;
