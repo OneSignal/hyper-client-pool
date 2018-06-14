@@ -407,7 +407,9 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::sync::atomic::{Ordering, AtomicUsize};
+    use std::time::Duration;
 
+    use hyper::StatusCode;
     use hyper::method::Method;
     use hyper::Url;
 
@@ -433,33 +435,54 @@ mod tests {
         }
     }
 
+    fn check_successful_result(result: DeliveryResult) -> bool {
+        match result {
+            DeliveryResult::Response { inner, .. } => {
+                *inner.status() == StatusCode::Ok
+            },
+            _ => false,
+        }
+    }
 
     #[test]
     fn lots_of_get_single_worker() {
         let mut config = Config::default();
-        config.workers = 1;
+        config.dns_threads_per_worker = 4;
+        config.workers = 4;
+        config.connection_timeout = Duration::from_secs(60);
+        config.max_sockets = 1_000;
+        config.max_transactions = None;
 
         let mut pool = Pool::new(config);
         let (tx, rx) = mpsc::channel();
 
-        for _ in 0..5 {
+        for _ in 0..600 {
             pool.request(
                 Url::parse("https://www.httpbin.org").unwrap(),
                 Transaction::new(tx.clone(), Method::Get, Default::default(), None)
             ).expect("request ok");
         }
 
-        assert_eq!(pool.clients[0].active_transactions(), 5);
+        // assert_eq!(pool.clients[0].active_transactions(), 5);
 
         let mut received = 0;
+        let mut successes = 0;
+        let mut not_successes = 0;
         while let Ok(result) = rx.recv() {
-            println!("got result: {:?}\n\n", result);
+            // println!("got result: {:?}\n\n", result);
+            if check_successful_result(result) {
+                successes += 1;
+            } else {
+                not_successes += 1;
+            }
 
             received += 1;
-            if received == 5 {
+            if received == 600 {
                 break;
             }
         }
+
+        println!("Successes: {} || Not Successes: {}", successes, not_successes);
     }
 
     #[test]
