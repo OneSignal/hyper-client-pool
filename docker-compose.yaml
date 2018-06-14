@@ -1,0 +1,32 @@
+version: "3.2"
+services:
+  # We start this service with just a bash shell. It doesn't run anything in the default mode,
+  # its essentially just a tty interface so we can run whatever commands we need to.
+  hyper-client-pool:
+    container_name: hyper-client-pool-dev
+    image: hyper-client-pool
+    build: ./
+    stdin_open: true
+    tty: true
+    command: bash
+    environment:
+      # We mount a volume (hyper-client-pool-target) at `/hyper-client-pool-target` and specify
+      # the CARGO_TARGET_DIR inside of it so that no files are synced between
+      # Docker and the local filesystem as it is very slow for MacOS.
+      #
+      # Also the target dir is nested (`/hyper-client-pool-target/target`) because `cargo clean`
+      # wants to delete the entire CARGO_TARGET_DIR, but can't if it's pointing to a volume.
+      CARGO_TARGET_DIR: "/hyper-client-pool-target/target"
+    volumes:
+      - .:/hyper-client-pool:cached
+      - target:/hyper-client-pool-target
+      - cargo:/usr/local/cargo
+      - ~/.ssh:/root/.ssh
+
+  httpbin:
+    image: vimagick/httpbin
+    restart: always
+
+volumes:
+  cargo:
+  target:

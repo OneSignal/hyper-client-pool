@@ -458,7 +458,7 @@ mod tests {
 
         for _ in 0..600 {
             pool.request(
-                Url::parse("https://www.httpbin.org").unwrap(),
+                Url::parse("http://httpbin:80/ip").unwrap(),
                 Transaction::new(tx.clone(), Method::Get, Default::default(), None)
             ).expect("request ok");
         }
