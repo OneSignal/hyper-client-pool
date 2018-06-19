@@ -1,7 +1,6 @@
 FROM osig/rust-ubuntu:1.26
 
-RUN apt-get update
-RUN apt-get install -y ssh git lsof
+RUN apt-get update && apt-get install -y git ssh lsof
 
 WORKDIR /hyper-client-pool
 
