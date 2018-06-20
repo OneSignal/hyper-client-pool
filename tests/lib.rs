@@ -53,6 +53,14 @@ fn onesignal_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
     )
 }
 
+fn google_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
+    Transaction::new(
+        deliverable,
+        Request::get("https://www.google.com/").body(Body::empty()).unwrap(),
+        false,
+    )
+}
+
 fn httpbin_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
     Transaction::new(
         deliverable,
@@ -328,7 +336,7 @@ fn keep_alive_works_as_expected() {
 }
 
 #[test]
-fn max_idle_connections_works_as_expected() {
+fn max_connections_works_as_expected() {
     let _write = TEST_LOCK.write().unwrap_or_else(|e| e.into_inner());
 
     // block until no connections are open - this is unfortunate..
@@ -340,6 +348,7 @@ fn max_idle_connections_works_as_expected() {
     let mut config = default_config();
     config.workers = 2;
     config.max_connections_per_worker = 3;
+    config.keep_alive_timeout = Duration::from_secs(30);
 
     let mut pool = Pool::new(config).unwrap();
     let (tx, rx) = mpsc::channel();
@@ -354,6 +363,16 @@ fn max_idle_connections_works_as_expected() {
     }
     // 2 workers x 3 idle connections = 6
     assert_onesignal_connection_open_count_eq!(6);
+
+    // open new requests to httpbin, should evict the keep alive connections
+    for _ in 0..10 {
+        pool.request(google_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
+    }
+    // wait for connections to finish
+    for _ in 0..10 {
+        assert_successful_result(rx.recv().unwrap());
+    }
+    assert_onesignal_connection_open_count_eq!(0);
 
     pool.shutdown();
 }
