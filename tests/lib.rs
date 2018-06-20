@@ -39,7 +39,7 @@ fn default_config() -> Config {
         keep_alive_timeout: Duration::from_secs(3),
         transaction_timeout: Duration::from_secs(20),
         dns_threads_per_worker: 1,
-        max_idle_connections_per_worker: 1_000,
+        max_connections_per_worker: 1_000,
         max_transactions_per_worker: 1_000,
         workers: 2,
     }
@@ -339,7 +339,7 @@ fn max_idle_connections_works_as_expected() {
 
     let mut config = default_config();
     config.workers = 2;
-    config.max_idle_connections_per_worker = 3;
+    config.max_connections_per_worker = 3;
 
     let mut pool = Pool::new(config).unwrap();
     let (tx, rx) = mpsc::channel();
