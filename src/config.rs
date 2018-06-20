@@ -13,7 +13,8 @@ pub struct Config {
     pub dns_threads_per_worker: usize,
 
     /// Max idle connections per worker, trying to create
-    /// requests past this limit will fail (return Full?)
+    /// requests past this limit will wait for an idle connection
+    /// or fail if no idle connection can be created
     pub max_connections_per_worker: usize,
 
     /// Max transactions per worker spawned
