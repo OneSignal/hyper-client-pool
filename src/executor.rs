@@ -79,6 +79,7 @@ impl<D: Deliverable> Executor<D> {
         let keep_alive_timeout = config.keep_alive_timeout;
         let transaction_timeout = config.transaction_timeout.clone();
         let dns_threads_per_worker = config.dns_threads_per_worker;
+        let max_idle_connections_per_worker = config.max_idle_connections_per_worker;
 
         let tls = TlsConnector::builder().and_then(|builder| builder.build()).map_err(SpawnError::HttpsConnector)?;
 
@@ -95,6 +96,7 @@ impl<D: Deliverable> Executor<D> {
                 let client = hyper::Client::builder()
                     .keep_alive(true)
                     .keep_alive_timeout(Some(keep_alive_timeout))
+                    .max_idle_connections(max_idle_connections_per_worker)
                     .build(connector);
 
                 let executor = Executor {

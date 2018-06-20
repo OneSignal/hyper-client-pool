@@ -12,6 +12,10 @@ pub struct Config {
     /// Number of DNS threads per worker
     pub dns_threads_per_worker: usize,
 
+    /// Max idle connections per worker, trying to create
+    /// requests past this limit will fail (return Full?)
+    pub max_idle_connections_per_worker: usize,
+
     /// Max transactions per worker spawned
     pub max_transactions_per_worker: usize,
 
