@@ -12,13 +12,15 @@ pub extern crate hyper;
 
 mod config;
 mod deliverable;
+mod delivery_result;
 mod error;
 mod executor;
 mod pool;
 mod transaction;
 
 pub use deliverable::Deliverable;
-pub use transaction::{Transaction, DeliveryResult};
+pub use delivery_result::DeliveryResult;
+pub use transaction::{Transaction};
 pub use pool::Pool;
 pub use error::{Error, ErrorKind, SpawnError};
 pub use config::Config;
