@@ -134,14 +134,15 @@ impl<D: Deliverable> Transaction<D> {
         client: &Client<HttpsConnector<HttpConnector>>,
         handle: &Handle,
         timeout: Duration,
-        counter: Counter
+        counter: Counter,
+        conn_counter: Counter,
     ) {
         let Transaction { deliverable, request, requires_body } = self;
         trace!("Spawning request: {:?}", request);
 
         let start_time = Instant::now();
         let task = task::current();
-        let request_future = client.request(request)
+        let request_future = client.request_with_counter(request, conn_counter)
             .and_then(move |response| -> Box<Future<Item=(Response<Body>, Option<Vec<u8>>), Error=hyper::Error> + Send> {
                 if requires_body {
                     let (parts, body) = response.into_parts();
@@ -255,7 +256,7 @@ mod tests {
                     Request::get("https://onesignal.com/").body(Body::empty()).unwrap(),
                     false,
                 );
-                transaction.spawn_request(&self.client, &self.handle, Duration::from_secs(10), Counter::new());
+                transaction.spawn_request(&self.client, &self.handle, Duration::from_secs(10), Counter::new(), Counter::new());
             }
 
             Ok(Async::Ready(()))

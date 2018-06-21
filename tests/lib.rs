@@ -328,7 +328,7 @@ fn keep_alive_works_as_expected() {
 }
 
 #[test]
-fn max_idle_connections_works_as_expected() {
+fn max_connections_works_as_expected() {
     let _write = TEST_LOCK.write().unwrap_or_else(|e| e.into_inner());
 
     // block until no connections are open - this is unfortunate..
@@ -340,20 +340,48 @@ fn max_idle_connections_works_as_expected() {
     let mut config = default_config();
     config.workers = 2;
     config.max_connections_per_worker = 3;
+    config.keep_alive_timeout = Duration::from_secs(5);
 
     let mut pool = Pool::new(config).unwrap();
     let (tx, rx) = mpsc::channel();
 
-    for _ in 0..20 {
+    // 2 workers x 3 idle connections = 6
+    for _ in 0..6 {
         pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
     }
 
+    // Because there are 6 connections in flight, new requests should fail
+    match pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))) {
+        Err(err) => assert_eq!(err.kind, ErrorKind::PoolFull),
+        _ => panic!("should fail!"),
+    }
+
     // wait for requests to finish
-    for _ in 0..20 {
+    for _ in 0..6 {
         assert_successful_result(rx.recv().unwrap());
     }
-    // 2 workers x 3 idle connections = 6
+
     assert_onesignal_connection_open_count_eq!(6);
+
+    // Should not be able to start some new transactions
+    for _ in 0..3 {
+        match pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))) {
+            Err(err) => assert_eq!(err.kind, ErrorKind::PoolFull),
+            _ => panic!("should fail!"),
+        }
+    }
+
+    // wait until no connections are open..
+    while onesignal_connection_count().0 > 0 {}
+
+    // Should be able to open new connections now
+    for _ in 0..4 {
+        pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
+    }
+    // wait for requests to finish
+    for _ in 0..4 {
+        assert_successful_result(rx.recv().unwrap());
+    }
 
     pool.shutdown();
 }

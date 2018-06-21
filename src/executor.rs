@@ -35,6 +35,9 @@ pub(crate) struct ExecutorHandle<D: Deliverable> {
     transaction_counter: WeakCounter,
     max_transactions: usize,
 
+    conns_counter: WeakCounter,
+    max_connections: usize,
+
     sender: FuturesMpsc::UnboundedSender<ExecutorMessage<D>>,
     join_handle: JoinHandle<()>,
 }
@@ -45,7 +48,7 @@ enum ExecutorState<D: Deliverable> {
     Finished,
 }
 
-type ExecutorMessage<D> = (Transaction<D>, Counter);
+type ExecutorMessage<D> = (Transaction<D>, Counter, Counter);
 
 impl<D: Deliverable> ExecutorHandle<D> {
     pub(crate) fn send(&mut self, transaction: Transaction<D>) -> Result<(), RequestError<D>> {
@@ -53,8 +56,10 @@ impl<D: Deliverable> ExecutorHandle<D> {
             return Err(RequestError::PoolFull(transaction));
         }
 
-        if let Err(err) = self.sender.unbounded_send((transaction, self.transaction_counter.spawn_upgrade())) {
-            let (transaction, _counter) = err.into_inner();
+        if let Err(err) = self.sender.unbounded_send(
+            (transaction, self.transaction_counter.spawn_upgrade(), self.conns_counter.spawn_upgrade())
+        ) {
+            let (transaction, _counter, _conns_counter) = err.into_inner();
             return Err(RequestError::FailedSend(transaction));
         }
 
@@ -68,6 +73,7 @@ impl<D: Deliverable> ExecutorHandle<D> {
 
     fn is_full(&self) -> bool {
         self.transaction_counter.count() >= self.max_transactions
+            || self.conns_counter.count() >= self.max_connections
     }
 }
 
@@ -79,7 +85,8 @@ impl<D: Deliverable> Executor<D> {
         let keep_alive_timeout = config.keep_alive_timeout;
         let transaction_timeout = config.transaction_timeout.clone();
         let dns_threads_per_worker = config.dns_threads_per_worker;
-        let max_connections_per_worker = config.max_connections_per_worker;
+        let conns_counter = WeakCounter::new();
+        let conns_counter_clone = conns_counter.clone();
 
         let tls = TlsConnector::builder().and_then(|builder| builder.build()).map_err(SpawnError::HttpsConnector)?;
 
@@ -96,8 +103,7 @@ impl<D: Deliverable> Executor<D> {
                 let client = hyper::Client::builder()
                     .keep_alive(true)
                     .keep_alive_timeout(Some(keep_alive_timeout))
-                    .max_connections(max_connections_per_worker)
-                    .build(connector);
+                    .build_with_conns_counter(connector, Some(conns_counter_clone));
 
                 let executor = Executor {
                     state: ExecutorState::Running(rx),
@@ -117,6 +123,8 @@ impl<D: Deliverable> Executor<D> {
                 ExecutorHandle {
                     transaction_counter: weak_counter,
                     max_transactions: config.max_transactions_per_worker,
+                    conns_counter,
+                    max_connections: config.max_connections_per_worker,
                     sender: tx,
                     join_handle,
                 }
@@ -140,14 +148,15 @@ impl<D: Deliverable> Future for Executor<D> {
                 ExecutorState::Running(mut receiver) => {
                     loop {
                         match receiver.poll() {
-                            Ok(Async::Ready(Some((transaction, counter)))) => {
+                            Ok(Async::Ready(Some((transaction, counter, conn_counter)))) => {
                                 trace!("Executor: spawning transaction.");
 
                                 transaction.spawn_request(
                                     &self.client,
                                     &self.handle,
                                     self.transaction_timeout.clone(),
-                                    counter
+                                    counter,
+                                    conn_counter,
                                 );
                             },
                             // No messages
