@@ -106,7 +106,7 @@ impl<D: Deliverable> Executor<D> {
                 let connector = HttpsConnector::from((http, tls));
                 let client = hyper::Client::builder()
                     .keep_alive(true)
-                    .keep_alive_timeout(Some(keep_alive_timeout))
+                    // .keep_alive_timeout(Some(keep_alive_timeout))
                     .build_with_conns_counter(connector, Some(conns_counter_clone));
 
                 let executor = Executor {
