@@ -22,6 +22,11 @@ pub struct Pool<D: Deliverable> {
     executor_handles: RoundRobinPool<ExecutorHandle<D>, SpawnError>,
 }
 
+pub struct PoolInfo {
+    pub total_transaction_count: usize,
+    pub total_connection_count: usize,
+}
+
 impl<D: Deliverable> Pool<D> {
     /// Create a new pool according to config
     pub fn new(mut config: Config) -> Result<Pool<D>, SpawnError> {
@@ -87,6 +92,22 @@ impl<D: Deliverable> Pool<D> {
 
         for join_handle in join_handles.into_iter() {
             let _ = join_handle.join();
+        }
+    }
+
+    pub fn query_info(&self) -> PoolInfo {
+        let mut total_transaction_count = 0;
+        let mut total_connection_count = 0;
+
+        for handle in self.executor_handles.items_iter() {
+            let (transaction_count, connection_count) = handle.counts();
+            total_transaction_count += transaction_count;
+            total_connection_count += connection_count;
+        }
+
+        PoolInfo {
+            total_transaction_count,
+            total_connection_count,
         }
     }
 }

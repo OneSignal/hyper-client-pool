@@ -21,6 +21,6 @@ mod transaction;
 pub use deliverable::Deliverable;
 pub use delivery_result::DeliveryResult;
 pub use transaction::{Transaction};
-pub use pool::Pool;
+pub use pool::{Pool, PoolInfo};
 pub use error::{Error, ErrorKind, SpawnError};
 pub use config::Config;

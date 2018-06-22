@@ -75,6 +75,10 @@ impl<D: Deliverable> ExecutorHandle<D> {
         self.transaction_counter.count() >= self.max_transactions
             || self.conns_counter.count() >= self.max_connections
     }
+
+    pub(crate) fn counts(&self) -> (usize, usize) {
+        (self.transaction_counter.count(), self.conns_counter.count())
+    }
 }
 
 impl<D: Deliverable> Executor<D> {
