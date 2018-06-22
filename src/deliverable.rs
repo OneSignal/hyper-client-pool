@@ -1,4 +1,4 @@
-use transaction::DeliveryResult;
+use delivery_result::DeliveryResult;
 
 /// The trait that handles the completion of the transaction ([`DeliveryResult`]).
 /// `complete()` is guaranteed to be called once the Transaction is spawned, even

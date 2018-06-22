@@ -11,10 +11,10 @@ use std::sync::{Arc, mpsc};
 use std::sync::atomic::{Ordering, AtomicUsize};
 use std::sync::RwLock;
 use std::thread;
-use std::time::Duration;
+use std::time::{Instant, Duration};
 
 use hyper_client_pool::*;
-use hyper::{Request, Method};
+use hyper::{Request, Body};
 use ipnet::{Contains, IpNet};
 use regex::Regex;
 
@@ -37,27 +37,47 @@ impl Deliverable for MspcDeliverable {
 fn default_config() -> Config {
     Config {
         keep_alive_timeout: Duration::from_secs(3),
-        transaction_timeout: Duration::from_secs(10),
+        transaction_timeout: Duration::from_secs(20),
+        dns_threads_per_worker: 1,
+        max_connections_per_worker: 1_000,
         max_transactions_per_worker: 1_000,
         workers: 2,
     }
 }
 
 fn onesignal_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
-    Transaction::new(deliverable, Request::new(Method::Get, "https://onesignal.com/".parse().unwrap()))
+    Transaction::new(
+        deliverable,
+        Request::get("https://onesignal.com/").body(Body::empty()).unwrap(),
+        false,
+    )
+}
+
+fn httpbin_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
+    Transaction::new(
+        deliverable,
+        Request::get("http://httpbin:80/ip").body(Body::empty()).unwrap(),
+        false,
+    )
+}
+
+fn check_successful_result(result: DeliveryResult) -> (bool, DeliveryResult) {
+    let successful = match result {
+        DeliveryResult::Response { ref response, .. } => {
+            response.status().is_success()
+        },
+        _ => false
+    };
+    (successful, result)
 }
 
 fn assert_successful_result(result: DeliveryResult) {
-    match result {
-        DeliveryResult::Response { response, .. } => {
-            assert!(response.status().is_success(), format!("Expected successful response: {:?}", response.status()));
-        },
-        res => panic!("Expected DeliveryResult::Response, unexpected delivery result: {:?}", res),
-    }
+    let (successful, result) = check_successful_result(result);
+    assert_eq!(true, successful, "Not successful result: {:?}!", result);
 }
 
 #[test]
-fn lots_of_get_single_worker() {
+fn some_gets_single_worker() {
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
     let _ = env_logger::try_init();
@@ -75,6 +95,45 @@ fn lots_of_get_single_worker() {
     for _ in 0..5 {
         assert_successful_result(rx.recv().unwrap());
     }
+
+    pool.shutdown();
+}
+
+/// This test is useful for profiling performance, but not a good
+/// test to run everytime as it may spuriously fail some requests
+#[test]
+#[ignore]
+fn ton_of_gets() {
+    let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
+
+    let _ = env_logger::try_init();
+
+    let mut config = default_config();
+    config.dns_threads_per_worker = 4;
+    config.workers = 4;
+    config.max_transactions_per_worker = 1_000;
+    config.transaction_timeout = Duration::from_secs(60);
+
+    let mut pool = Pool::new(config).unwrap();
+    let (tx, rx) = mpsc::channel();
+
+    for _ in 0..600 {
+        pool.request(httpbin_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
+    }
+
+    let mut successes = 0;
+    let mut not_successes = 0;
+    for _ in 0..600 {
+        let (successful, _result) = check_successful_result(rx.recv().unwrap());
+        if successful {
+            successes += 1;
+        } else {
+            not_successes += 1;
+        }
+    }
+
+    pool.shutdown();
+    println!("Successes: {} | Not Successes: {}", successes, not_successes);
 }
 
 #[derive(Debug, Clone)]
@@ -146,6 +205,8 @@ fn full_error() {
     for _ in 0..3 {
         assert_successful_result(rx.recv().unwrap());
     }
+
+    pool.shutdown();
 }
 
 static CLOUDFLARE_NETS: &[&str] = &[
@@ -215,13 +276,11 @@ fn onesignal_connection_count() -> (usize, String) {
         .expect("command works");
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let lines : Vec<_> = stdout.split("\n")
+    let matching_lines = stdout.split("\n")
         .filter(|line| matches_cloudflare_ip(line))
-        .collect();
+        .count();
 
-    let stdout = lines.join("\n");
-
-    (lines.len(), stdout)
+    (matching_lines, stdout)
 }
 
 macro_rules! assert_onesignal_connection_open_count_eq {
@@ -252,14 +311,79 @@ fn keep_alive_works_as_expected() {
 
     // wait for request to finish
     assert_successful_result(rx.recv().unwrap());
-    thread::sleep(Duration::from_secs(1));
-    assert_onesignal_connection_open_count_eq!(1);
-    thread::sleep(Duration::from_secs(1));
-    assert_onesignal_connection_open_count_eq!(1);
+    let start = Instant::now();
+    loop {
+        let seconds_elapsed = start.elapsed().as_secs();
+        if seconds_elapsed < 2 {
+            assert_onesignal_connection_open_count_eq!(1);
+        } else if seconds_elapsed > 3 {
+            // keep-alive should kill connection by now
+            assert_onesignal_connection_open_count_eq!(0);
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
 
-    thread::sleep(Duration::from_secs(7));
-    // keep-alive should kill connection by now
-    assert_onesignal_connection_open_count_eq!(0);
+    pool.shutdown();
+}
+
+#[test]
+fn max_connections_works_as_expected() {
+    let _write = TEST_LOCK.write().unwrap_or_else(|e| e.into_inner());
+
+    // block until no connections are open - this is unfortunate..
+    // but at least we have tests covering the keep-alive :)
+    while onesignal_connection_count().0 > 0 {}
+
+    let _ = env_logger::try_init();
+
+    let mut config = default_config();
+    config.workers = 2;
+    config.max_connections_per_worker = 3;
+    config.keep_alive_timeout = Duration::from_secs(5);
+
+    let mut pool = Pool::new(config).unwrap();
+    let (tx, rx) = mpsc::channel();
+
+    // 2 workers x 3 idle connections = 6
+    for _ in 0..6 {
+        pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
+    }
+
+    // Because there are 6 connections in flight, new requests should fail
+    match pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))) {
+        Err(err) => assert_eq!(err.kind, ErrorKind::PoolFull),
+        _ => panic!("should fail!"),
+    }
+
+    // wait for requests to finish
+    for _ in 0..6 {
+        assert_successful_result(rx.recv().unwrap());
+    }
+
+    assert_onesignal_connection_open_count_eq!(6);
+
+    // Should not be able to start some new transactions
+    for _ in 0..3 {
+        match pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))) {
+            Err(err) => assert_eq!(err.kind, ErrorKind::PoolFull),
+            _ => panic!("should fail!"),
+        }
+    }
+
+    // wait until no connections are open..
+    while onesignal_connection_count().0 > 0 {}
+
+    // Should be able to open new connections now
+    for _ in 0..4 {
+        pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
+    }
+    // wait for requests to finish
+    for _ in 0..4 {
+        assert_successful_result(rx.recv().unwrap());
+    }
+
+    pool.shutdown();
 }
 
 #[test]
@@ -297,6 +421,8 @@ fn connection_reuse_works_as_expected() {
 
     // there should only be one connection open
     assert_onesignal_connection_open_count_eq!(1);
+
+    pool.shutdown();
 }
 
 #[test]
@@ -314,11 +440,17 @@ fn timeout_works_as_expected() {
     // Start first request
     pool.request(
         // This endpoint will not return for a while, therefore should timeout
-        Transaction::new(MspcDeliverable(tx.clone()), Request::new(Method::Get, "https://httpstat.us/200?sleep=5000".parse().unwrap()))
+        Transaction::new(
+            MspcDeliverable(tx.clone()),
+            Request::get("https://httpstat.us/200?sleep=5000").body(Body::empty()).unwrap(),
+            false,
+        )
     ).expect("request ok");
 
     match rx.recv().unwrap() {
         DeliveryResult::Timeout { .. } => (), // ok
         res => panic!("Expected timeout!, got: {:?}", res),
     }
+
+    pool.shutdown();
 }
