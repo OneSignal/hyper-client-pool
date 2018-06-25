@@ -91,6 +91,7 @@ impl<D: Deliverable> Executor<D> {
         let weak_counter_clone = weak_counter.clone();
         let transaction_timeout = config.transaction_timeout.clone();
         let dns_threads_per_worker = config.dns_threads_per_worker;
+        let keep_alive_timeout = config.keep_alive_timeout;
         let conns_counter = WeakCounter::new();
         let conns_counter_clone = conns_counter.clone();
 
@@ -107,7 +108,7 @@ impl<D: Deliverable> Executor<D> {
                 let connector = HttpsConnector::from((http, tls));
                 let client = hyper::Client::builder()
                     .keep_alive(true)
-                    .keep_alive_timeout(None)
+                    .keep_alive_timeout(Some(keep_alive_timeout))
                     .build_with_conns_counter(connector, Some(conns_counter_clone));
 
                 let executor = Executor {
