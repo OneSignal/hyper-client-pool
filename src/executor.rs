@@ -86,7 +86,6 @@ impl<D: Deliverable> Executor<D> {
         let (tx, rx) = FuturesMpsc::unbounded();
         let weak_counter = WeakCounter::new();
         let weak_counter_clone = weak_counter.clone();
-        let keep_alive_timeout = config.keep_alive_timeout;
         let transaction_timeout = config.transaction_timeout.clone();
         let dns_threads_per_worker = config.dns_threads_per_worker;
         let conns_counter = WeakCounter::new();
@@ -102,11 +101,10 @@ impl<D: Deliverable> Executor<D> {
 
                 let mut http = HttpConnector::new(dns_threads_per_worker);
                 http.enforce_http(false);
-                http.set_keepalive(Some(keep_alive_timeout));
                 let connector = HttpsConnector::from((http, tls));
                 let client = hyper::Client::builder()
                     .keep_alive(true)
-                    // .keep_alive_timeout(Some(keep_alive_timeout))
+                    .keep_alive_timeout(None)
                     .build_with_conns_counter(connector, Some(conns_counter_clone));
 
                 let executor = Executor {
