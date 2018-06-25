@@ -12,6 +12,7 @@ use hyper_tls::HttpsConnector;
 use hyper::{self, Client};
 use native_tls::TlsConnector;
 use tokio::runtime::current_thread::{Handle, Runtime};
+use countmap::CountMap;
 
 use config::Config;
 use deliverable::Deliverable;
@@ -27,6 +28,8 @@ pub(crate) struct Executor<D: Deliverable> {
     transaction_counter: WeakCounter,
     transaction_timeout: Duration,
     state: ExecutorState<D>,
+
+    domains_sent_map: CountMap<String>,
 }
 
 /// The handle to the Executor. It lives on the Pool thread
@@ -113,6 +116,7 @@ impl<D: Deliverable> Executor<D> {
                     transaction_counter: weak_counter_clone,
                     client,
                     transaction_timeout,
+                    domains_sent_map: CountMap::new(),
                 };
 
                 if let Err(err) = runtime.block_on(executor) {
@@ -152,6 +156,20 @@ impl<D: Deliverable> Future for Executor<D> {
                         match receiver.poll() {
                             Ok(Async::Ready(Some((transaction, counter, conn_counter)))) => {
                                 trace!("Executor: spawning transaction.");
+
+                                {
+                                    let uri = transaction.request.uri();
+                                    if let (Some(scheme), Some(auth)) = (uri.scheme_part(), uri.authority_part()) {
+                                        let domain = format!("{}://{}", scheme, auth);
+                                        self.domains_sent_map.insert_or_increment(domain);
+                                    }
+
+                                    if self.domains_sent_map.len() % 1000 == 0 {
+                                        for (key, value) in &self.domains_sent_map {
+                                            error!("QWERTY_DOMAIN - {}: {}", key, value);
+                                        }
+                                    }
+                                }
 
                                 transaction.spawn_request(
                                     &self.client,

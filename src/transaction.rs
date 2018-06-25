@@ -20,7 +20,7 @@ use delivery_result::DeliveryResult;
 /// which receives the result of the request.
 pub struct Transaction<D: Deliverable> {
     deliverable: D,
-    request: Request<Body>,
+    pub(crate) request: Request<Body>,
     requires_body: bool,
 }
 
