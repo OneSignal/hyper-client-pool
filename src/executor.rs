@@ -30,6 +30,7 @@ pub(crate) struct Executor<D: Deliverable> {
     state: ExecutorState<D>,
 
     domains_sent_map: CountMap<String>,
+    domains_sent_len: u64,
 }
 
 /// The handle to the Executor. It lives on the Pool thread
@@ -118,6 +119,7 @@ impl<D: Deliverable> Executor<D> {
                     client,
                     transaction_timeout,
                     domains_sent_map: CountMap::new(),
+                    domains_sent_len: 0,
                 };
 
                 if let Err(err) = runtime.block_on(executor) {
@@ -163,12 +165,15 @@ impl<D: Deliverable> Future for Executor<D> {
                                     if let (Some(scheme), Some(auth)) = (uri.scheme_part(), uri.authority_part()) {
                                         let domain = format!("{}://{}", scheme, auth);
                                         self.domains_sent_map.insert_or_increment(domain);
+                                        self.domains_sent_len += 1;
                                     }
 
-                                    if self.domains_sent_map.len() % 1000 == 0 {
+                                    if self.domains_sent_len % 500 == 0 {
+                                        error!("QWERTY_DOMAIN START --- ");
                                         for (key, value) in &self.domains_sent_map {
                                             error!("QWERTY_DOMAIN - {}: {}", key, value);
                                         }
+                                        error!("QWERTY_DOMAIN END --- ");
                                     }
                                 }
 
