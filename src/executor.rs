@@ -53,7 +53,9 @@ impl<D: Deliverable> ExecutorHandle<D> {
             return Err(RequestError::PoolFull(transaction));
         }
 
-        if let Err(err) = self.sender.unbounded_send((transaction, self.transaction_counter.spawn_upgrade())) {
+        if let Err(err) = self.sender.unbounded_send(
+            (transaction, self.transaction_counter.spawn_upgrade())
+        ) {
             let (transaction, _counter) = err.into_inner();
             return Err(RequestError::FailedSend(transaction));
         }
@@ -95,6 +97,7 @@ impl<D: Deliverable> Executor<D> {
                 let client = hyper::Client::builder()
                     .keep_alive(true)
                     .keep_alive_timeout(Some(keep_alive_timeout))
+                    .avoid_socket_thrash(true)
                     .build(connector);
 
                 let executor = Executor {
