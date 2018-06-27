@@ -1,6 +1,40 @@
-language: rust
-cache: cargo
-rust: stable
+# Use sudo to allow travis.sh to give ownership to everything to travis
+sudo: true
+
+# We don't set Rust as the language here because we
+# don't want travis to download and install Rust (since we
+# just use the Rust version included in the Docker image)
+language: generic
+# Because we're not using the Rust language, we must cache the
+# cargo directories manually instead of just specifying `cargo`
+cache:
+  directories:
+  - $HOME/.cargo
+  - $TRAVIS_BUILD_DIR/target
+
+services:
+  - docker
+
+before_install:
+  - docker build -t hyper-client-pool .
 
 script:
-  - cargo test
+  # Startup the docker-compose environment, but avoid starting
+  # the `hyper-client-pool` container
+  - docker-compose up -d httpbin
+  # Run the `hyper-client-pool` container separately
+  - |
+    docker-compose run \
+      --rm \
+      -v $(pwd)/upload:/upload \
+      -v ~/.cargo/git:/usr/local/cargo/git \
+      -v ~/.cargo/registry:/usr/local/cargo/registry \
+      -v $(pwd)/target:/hyper-client-pool-target/target \
+      hyper-client-pool \
+      bash -c "script/travis.sh"
+
+# Somehow files in the caches (which are synced with Docker) are not
+# owned by travis, so they get permission denied when caching.
+before_cache:
+  - sudo chown -R travis:travis $HOME/.cargo
+  - sudo chown -R travis:travis $TRAVIS_BUILD_DIR/target

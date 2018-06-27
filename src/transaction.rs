@@ -1,6 +1,6 @@
 use std::fmt;
-use std::io;
 use std::time::{Instant, Duration};
+use std::io::{self, ErrorKind};
 
 use futures::{Stream, Poll, Async, Future, task};
 use futures::future::{self, Either};
@@ -8,8 +8,9 @@ use futures::task::Task;
 use hyper_http_connector::HttpConnector;
 use hyper_tls::HttpsConnector;
 use hyper::{self, Request, Client};
-use hyper::client::{Response};
-use tokio_core::reactor::{Handle, Timeout};
+use hyper::{Body, Response};
+use tokio::timer::{Deadline, DeadlineError};
+use tokio::runtime::current_thread::Handle;
 
 use deliverable::Deliverable;
 use raii_counter::Counter;
@@ -26,8 +27,8 @@ pub enum DeliveryResult {
 
     /// Received a response from the external server.
     Response {
-        response: Response,
-        body: Vec<u8>,
+        response: Response<Body>,
+        body: Option<Vec<u8>>,
         duration: Duration,
     },
 
@@ -53,7 +54,8 @@ pub enum DeliveryResult {
 /// which receives the result of the request.
 pub struct Transaction<D: Deliverable> {
     deliverable: D,
-    request: Request,
+    request: Request<Body>,
+    requires_body: bool,
 }
 
 impl<D: Deliverable> fmt::Debug for Transaction<D> {
@@ -86,16 +88,12 @@ impl<D: Deliverable, W: Future> Drop for SpawnedTransaction<D, W> {
     }
 }
 
-impl<D, W, R> Future for SpawnedTransaction<D, W>
+impl<D, W> Future for SpawnedTransaction<D, W>
 where
     D: Deliverable,
     W: Future<
-        Item=Either<((Response, Vec<u8>), Timeout), ((), R)>,
-        Error=Either<(hyper::Error, Timeout), (io::Error, R)>
-    >,
-    R: Future<
-        Item=(Response, Vec<u8>),
-        Error=hyper::Error,
+        Item=(Response<Body>, Option<Vec<u8>>),
+        Error=DeadlineError<hyper::Error>,
     >,
 {
     type Item = ();
@@ -104,46 +102,37 @@ where
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let delivery_result = match self.work.poll() {
             Ok(Async::NotReady) => return Ok(Async::NotReady),
-            Err(err) => {
+            Err(deadline_error) => {
                 let duration = self.start_time.elapsed();
-                // Request errored
-                match err {
-                    Either::A((hyper_error, _timeout)) => {
-                        trace!("Transaction errored during delivery, error: {:?}, duration: {:?}", hyper_error, duration);
-                        DeliveryResult::HyperError {
-                            error: hyper_error,
-                            duration,
-                        }
-                    },
-                    // Timeout errored
-                    Either::B((timeout_error, _request)) => {
-                        trace!("Transaction errored during timeout, error: {}, duration: {:?}", timeout_error, duration);
-                        DeliveryResult::TimeoutError {
-                            error: timeout_error,
-                            duration,
-                        }
+                if deadline_error.is_timer() {
+                    let timer_error = deadline_error.into_timer().expect("is_timer -> into_timer");
+                    trace!("Timer around Transaction errored, error: {:?}, duration: {:?}", timer_error, duration);
+                    DeliveryResult::TimeoutError {
+                        error: io::Error::new(ErrorKind::Other, timer_error),
+                        duration,
                     }
+                } else if deadline_error.is_elapsed() {
+                    DeliveryResult::Timeout {
+                        duration,
+                    }
+                } else if deadline_error.is_inner() {
+                    let hyper_error = deadline_error.into_inner().expect("is_inner -> into_inner");
+                    trace!("Transaction errored during delivery, error: {:?}, duration: {:?}", hyper_error, duration);
+                    DeliveryResult::HyperError {
+                        error: hyper_error,
+                        duration,
+                    }
+                } else {
+                    unreachable!("Unexpected deadline_error!");
                 }
             },
-            Ok(Async::Ready(res)) => {
+            Ok(Async::Ready((response, body))) => {
                 let duration = self.start_time.elapsed();
-                match res {
-                    // Got response
-                    Either::A(((response, body), _timeout)) => {
-                        trace!("Finished transaction with response: {:?}, duration: {:?}", response, duration);
-                        DeliveryResult::Response {
-                            response,
-                            body,
-                            duration,
-                        }
-                    },
-                    // Request timed out
-                    Either::B((_timeout, _request)) => {
-                        trace!("Finished transaction with timeout, duration: {:?}", duration);
-                        DeliveryResult::Timeout {
-                            duration,
-                        }
-                    },
+                trace!("Finished transaction with response: {:?}, duration: {:?}", response, duration);
+                DeliveryResult::Response {
+                    response,
+                    body,
+                    duration,
                 }
             }
         };
@@ -164,11 +153,13 @@ where
 impl<D: Deliverable> Transaction<D> {
     pub fn new(
         deliverable: D,
-        request: Request,
+        request: Request<Body>,
+        requires_body: bool,
     ) -> Transaction<D> {
         Transaction {
             deliverable,
             request,
+            requires_body,
         }
     }
 
@@ -179,43 +170,53 @@ impl<D: Deliverable> Transaction<D> {
         timeout: Duration,
         counter: Counter
     ) {
-        let Transaction { deliverable, request } = self;
+        let Transaction { deliverable, request, requires_body } = self;
         trace!("Spawning request: {:?}", request);
 
+        let start_time = Instant::now();
         let task = task::current();
         let request_future = client.request(request)
-            .and_then(|response| {
-                let status = response.status();
-                let headers = response.headers().clone();
-                response.body()
-                    .fold(Vec::new(), |mut acc, chunk| {
-                        acc.extend_from_slice(&*chunk);
-                        future::ok::<_, hyper::Error>(acc)
-                    })
-                    .map(move |body| {
-                        (Response::new().with_status(status).with_headers(headers), body)
-                    })
+            .and_then(move |response| {
+                if requires_body {
+                    let (parts, body) = response.into_parts();
+                    Either::A(
+                        body
+                        .fold(Vec::new(), |mut acc, chunk| {
+                            acc.extend_from_slice(&*chunk);
+                            future::ok::<_, hyper::Error>(acc)
+                        })
+                        .map(move |body| {
+                            (Response::from_parts(parts, Body::empty()), Some(body))
+                        })
+                    )
+                } else {
+                    // Note that you must consume the body if you want keepalive
+                    // to take affect.
+                    let (parts, body) = response.into_parts();
+                    Either::B(
+                        body
+                        .skip_while(|_| future::ok(true))
+                        .collect()
+                        .map(|_| {
+                            (Response::from_parts(parts, Body::empty()), None)
+                        })
+                    )
+                }
             });
 
-        let start_time = Instant::now();
-        match Timeout::new(timeout, handle) {
-            Err(error) => {
-                deliverable.complete(DeliveryResult::TimeoutError {
-                    error,
-                    duration: start_time.elapsed(),
-                });
-                warn!("Could not create timeout on handle for hyper_client_pool::Transaction");
-            },
-            Ok(timeout) => {
-                let timed_request = request_future.select2(timeout);
-                handle.spawn(SpawnedTransaction {
-                    deliverable: Some(deliverable),
-                    work: timed_request,
-                    _counter: counter,
-                    start_time,
-                    task,
-                });
-            }
+        let deadline = Instant::now() + timeout;
+        let work = Deadline::new(request_future, deadline);
+
+        if let Err(spawn_err) = handle.spawn(SpawnedTransaction {
+            deliverable: Some(deliverable),
+            work,
+            _counter: counter,
+            start_time,
+            task,
+        }) {
+            // The SpawnedTransaction should be dropped and
+            // therefore should notify the deliverable.
+            warn!("Failed to spawn transaction, error: {:?}", spawn_err);
         }
     }
 }
@@ -231,9 +232,10 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{Ordering, AtomicUsize};
     use std::thread;
-    use tokio_core::reactor::{Core, Timeout};
+    use tokio::timer::Delay;
+    use tokio::runtime::current_thread::{Runtime, Handle};
+    use hyper::Request;
 
-    use hyper::{Request, Method};
     use super::*;
 
     #[derive(Debug, Clone)]
@@ -282,7 +284,11 @@ mod tests {
 
         fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
             for _ in 0..TRANSACTION_SPAWN_COUNT {
-                let transaction = Transaction::new(self.counter.clone(), Request::new(Method::Get, "https://onesignal.com/".parse().unwrap()));
+                let transaction = Transaction::new(
+                    self.counter.clone(),
+                    Request::get("https://onesignal.com/").body(Body::empty()).unwrap(),
+                    false,
+                );
                 transaction.spawn_request(&self.client, &self.handle, Duration::from_secs(10), Counter::new());
             }
 
@@ -290,14 +296,13 @@ mod tests {
         }
     }
 
-    fn test_hyper_client(handle: &Handle) -> hyper::Client<HttpsConnector<HttpConnector>> {
+    fn test_hyper_client() -> hyper::Client<HttpsConnector<HttpConnector>> {
         let tls = TlsConnector::builder().and_then(|builder| builder.build()).unwrap();
-        let mut http = HttpConnector::new(&handle);
+        let mut http = HttpConnector::new(4);
         http.enforce_http(false);
         let connector = HttpsConnector::from((http, tls));
-        hyper::Client::configure()
-            .connector(connector)
-            .build(&handle)
+        hyper::Client::builder()
+            .build(connector)
     }
 
     #[test]
@@ -307,21 +312,25 @@ mod tests {
         let counter = DeliveryCounter::new();
         let counter_clone = counter.clone();
         let join_handle = thread::spawn(move || {
-            let mut core = Core::new().unwrap();
-            let handle = core.handle();
+            let mut runtime = Runtime::new().expect("Able to create current_thread::Runtime");
+            let handle = runtime.handle();
 
-            let client = test_hyper_client(&handle);
+            let client = test_hyper_client();
             let work = SpawnTransactionsFuture {
                 client,
                 counter: counter_clone,
-                handle: handle.clone(),
+                handle,
             }.and_then(|()| {
-                Timeout::new(Duration::from_secs(3), &handle).unwrap()
-                    .map_err(|_err| {})
+                let when = Instant::now() + Duration::from_secs(3);
+                Delay::new(when)
+                    .map_err(|err| panic!("Error on delay: {:?}", err))
+                    .and_then(|_| {
+                        Ok(())
+                    })
             });
 
             // Run the transactions until the core finishes
-            let _ = core.run(work);
+            let _ = runtime.block_on(work);
         });
 
         let _ = join_handle.join();
@@ -337,23 +346,25 @@ mod tests {
         let counter = DeliveryCounter::new();
         let counter_clone = counter.clone();
         let join_handle = thread::spawn(move || {
-            let mut core = Core::new().unwrap();
-            let handle = core.handle();
+            let mut runtime = Runtime::new().expect("Able to create current_thread::Runtime");
+            let handle = runtime.handle();
 
-            let client = test_hyper_client(&handle);
+            let client = test_hyper_client();
             let work = SpawnTransactionsFuture {
                 client,
                 counter: counter_clone,
-                handle: handle.clone(),
+                handle,
             }.and_then(|()| {
-                Timeout::new(Duration::from_secs(3), &handle).unwrap()
-                    .map_err(|_err| {
+                let when = Instant::now() + Duration::from_secs(3);
+                Delay::new(when)
+                    .map_err(|err| panic!("Error on delay: {:?}", err))
+                    .and_then(|_| -> Result<(), _> {
                         panic!("Hahaha, I will panic now.");
                     })
             });
 
             // Run the transactions until the core finishes
-            let _ = core.run(work);
+            let _ = runtime.block_on(work);
         });
 
         let _ = join_handle.join();
