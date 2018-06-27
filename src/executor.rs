@@ -53,9 +53,8 @@ impl<D: Deliverable> ExecutorHandle<D> {
             return Err(RequestError::PoolFull(transaction));
         }
 
-        if let Err(err) = self.sender.unbounded_send(
-            (transaction, self.transaction_counter.spawn_upgrade())
-        ) {
+        let payload = (transaction, self.transaction_counter.spawn_upgrade());
+        if let Err(err) = self.sender.unbounded_send(payload) {
             let (transaction, _counter) = err.into_inner();
             return Err(RequestError::FailedSend(transaction));
         }
