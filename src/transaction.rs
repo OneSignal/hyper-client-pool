@@ -3,7 +3,7 @@ use std::time::{Instant, Duration};
 use std::io::{self, ErrorKind};
 
 use futures::{Stream, Poll, Async, Future, task};
-use futures::future;
+use futures::future::{self, Either};
 use futures::task::Task;
 use hyper_http_connector::HttpConnector;
 use hyper_tls::HttpsConnector;
@@ -176,10 +176,10 @@ impl<D: Deliverable> Transaction<D> {
         let start_time = Instant::now();
         let task = task::current();
         let request_future = client.request(request)
-            .and_then(move |response| -> Box<Future<Item=(Response<Body>, Option<Vec<u8>>), Error=hyper::Error> + Send> {
+            .and_then(move |response| {
                 if requires_body {
                     let (parts, body) = response.into_parts();
-                    Box::new(
+                    Either::A(
                         body
                         .fold(Vec::new(), |mut acc, chunk| {
                             acc.extend_from_slice(&*chunk);
@@ -193,7 +193,7 @@ impl<D: Deliverable> Transaction<D> {
                     // Note that you must consume the body if you want keepalive
                     // to take affect.
                     let (parts, body) = response.into_parts();
-                    Box::new(
+                    Either::B(
                         body
                         .skip_while(|_| future::ok(true))
                         .collect()
