@@ -123,7 +123,7 @@ where
                         duration,
                     }
                 } else {
-                    unreachable!();
+                    unreachable!("Unexpected deadline_error!");
                 }
             },
             Ok(Async::Ready((response, body))) => {
