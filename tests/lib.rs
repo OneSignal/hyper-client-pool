@@ -98,11 +98,9 @@ fn some_gets_single_worker() {
     pool.shutdown();
 }
 
-/// This test is useful for profiling performance, but not a good
-/// test to run everytime as it may spuriously fail some requests
 #[test]
-#[ignore]
 fn ton_of_gets() {
+    const REQUEST_AMOUNT : usize = 600;
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
     let _ = env_logger::try_init();
@@ -116,13 +114,13 @@ fn ton_of_gets() {
     let mut pool = Pool::new(config).unwrap();
     let (tx, rx) = mpsc::channel();
 
-    for _ in 0..600 {
+    for _ in 0..REQUEST_AMOUNT {
         pool.request(httpbin_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
     }
 
     let mut successes = 0;
     let mut not_successes = 0;
-    for _ in 0..600 {
+    for _ in 0..REQUEST_AMOUNT {
         let (successful, _result) = check_successful_result(rx.recv().unwrap());
         if successful {
             successes += 1;
@@ -130,6 +128,9 @@ fn ton_of_gets() {
             not_successes += 1;
         }
     }
+
+    assert!(successes > ((REQUEST_AMOUNT as f32) * 0.9) as _);
+    assert!(not_successes < ((REQUEST_AMOUNT as f32) * 0.1) as _);
 
     pool.shutdown();
     println!("Successes: {} | Not Successes: {}", successes, not_successes);
