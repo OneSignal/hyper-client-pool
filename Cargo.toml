@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 log = "0.4"
-hyper = { git = "https://github.com/hyperium/hyper", branch = "client-continue-lost-connects" }
+hyper = "0.12"
 native-tls = "0.1"
 hyper-tls = "0.2"
 futures = "0.1"
@@ -21,6 +21,3 @@ env_logger = "0.5"
 lazy_static = "1.0"
 ipnet = "1.2"
 regex = "1.0"
-
-[replace]
-"hyper:0.12.3" = { git = "https://github.com/hyperium/hyper", branch = "client-continue-lost-connects" }
