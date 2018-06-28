@@ -96,7 +96,6 @@ impl<D: Deliverable> Executor<D> {
                 let client = hyper::Client::builder()
                     .keep_alive(true)
                     .keep_alive_timeout(Some(keep_alive_timeout))
-                    .avoid_socket_thrash(true)
                     .build(connector);
 
                 let executor = Executor {
