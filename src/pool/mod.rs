@@ -10,6 +10,11 @@ use deliverable::Deliverable;
 use error::{SpawnError, ErrorKind, Error, RequestError};
 use executor::{Executor, ExecutorHandle};
 use transaction::Transaction;
+use util::RwLockExt;
+
+mod builder;
+
+pub use self::builder::PoolBuilder;
 
 /// A pool of [`hyper::Client`]s.
 ///
@@ -23,14 +28,30 @@ pub struct Pool<D: Deliverable> {
 }
 
 impl<D: Deliverable> Pool<D> {
+    pub fn builder(config: Config) -> PoolBuilder<D> {
+        PoolBuilder::new(config)
+    }
+
     /// Create a new pool according to config
-    pub fn new(mut config: Config) -> Result<Pool<D>, SpawnError> {
+    pub(in pool) fn new(builder: PoolBuilder<D>) -> Result<Pool<D>, SpawnError> {
+        let PoolBuilder { mut config, transaction_counters, .. } = builder;
+
         // Make sure config.workers is a reasonable value
         let num_workers = cmp::max(1, config.workers);
         config.workers = num_workers;
 
         let executor_handles = RoundRobinPool::builder(config.workers, move || {
-                Executor::spawn(&config)
+                let executor = Executor::spawn(&config);
+
+                // Push a transaction counter to the synchronized transaction_counters
+                // if executor creation was successful
+                if let (Ok(ref executor), Some(ref transaction_counters)) =
+                    (executor.as_ref(), transaction_counters.as_ref())
+                {
+                    transaction_counters.write_ignore_poison().push(executor.transaction_counter())
+                }
+
+                executor
             })
             .build()?;
 

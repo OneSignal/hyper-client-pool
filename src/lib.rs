@@ -16,7 +16,9 @@ mod error;
 mod executor;
 mod pool;
 mod transaction;
+mod util;
 
+pub use executor::TransactionCounter;
 pub use deliverable::Deliverable;
 pub use transaction::{Transaction, DeliveryResult};
 pub use pool::Pool;
