@@ -19,6 +19,10 @@ use error::{RequestError, SpawnError};
 use raii_counter::{Counter, WeakCounter};
 use transaction::Transaction;
 
+mod transaction_counter;
+
+pub use self::transaction_counter::TransactionCounter;
+
 /// Lives on a separate thread running a tokio_core::Reactor
 /// and runs Transactions sent by the Pool.
 pub(crate) struct Executor<D: Deliverable> {
@@ -33,6 +37,7 @@ pub(crate) struct Executor<D: Deliverable> {
 /// and allows message passing through futures::mpsc.
 pub(crate) struct ExecutorHandle<D: Deliverable> {
     transaction_counter: WeakCounter,
+    worker_counter: Counter,
     max_transactions: usize,
 
     sender: FuturesMpsc::UnboundedSender<ExecutorMessage<D>>,
@@ -65,6 +70,13 @@ impl<D: Deliverable> ExecutorHandle<D> {
     /// Shutdowns the executor by dropping the sender, returns the JoinHandle to the thread.
     pub(crate) fn shutdown(self) -> JoinHandle<()> {
         self.join_handle
+    }
+
+    pub(crate) fn transaction_counter(&self) -> TransactionCounter {
+        TransactionCounter::new(
+            WeakCounter::clone(&self.transaction_counter),
+            Counter::clone(&self.worker_counter).downgrade(),
+        )
     }
 
     fn is_full(&self) -> bool {
@@ -115,6 +127,7 @@ impl<D: Deliverable> Executor<D> {
             .map(|join_handle| {
                 ExecutorHandle {
                     transaction_counter: weak_counter,
+                    worker_counter: Counter::new(),
                     max_transactions: config.max_transactions_per_worker,
                     sender: tx,
                     join_handle,

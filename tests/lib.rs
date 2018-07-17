@@ -84,7 +84,7 @@ fn some_gets_single_worker() {
     let mut config = default_config();
     config.workers = 1;
 
-    let mut pool = Pool::new(config).unwrap();
+    let mut pool = Pool::builder(config).build().unwrap();
     let (tx, rx) = mpsc::channel();
 
     for _ in 0..5 {
@@ -111,7 +111,7 @@ fn ton_of_gets() {
     config.max_transactions_per_worker = 1_000;
     config.transaction_timeout = Duration::from_secs(60);
 
-    let mut pool = Pool::new(config).unwrap();
+    let mut pool = Pool::builder(config).build().unwrap();
     let (tx, rx) = mpsc::channel();
 
     for _ in 0..REQUEST_AMOUNT {
@@ -170,7 +170,7 @@ fn graceful_shutdown() {
     let mut config = default_config();
     config.workers = 2;
 
-    let mut pool = Pool::new(config).unwrap();
+    let mut pool = Pool::builder(config).build().unwrap();
     for _ in 0..txn {
         pool.request(onesignal_transaction(counter.clone())).expect("request ok");
     }
@@ -189,7 +189,7 @@ fn full_error() {
     config.workers = 3;
     config.max_transactions_per_worker = 1;
 
-    let mut pool = Pool::new(config).unwrap();
+    let mut pool = Pool::builder(config).build().unwrap();
     let (tx, rx) = mpsc::channel();
 
     // Start requests
@@ -303,7 +303,7 @@ fn keep_alive_works_as_expected() {
     let mut config = default_config();
     config.keep_alive_timeout = Duration::from_secs(3);
 
-    let mut pool = Pool::new(config).unwrap();
+    let mut pool = Pool::builder(config).build().unwrap();
     let (tx, rx) = mpsc::channel();
 
     // Start first request
@@ -343,7 +343,7 @@ fn connection_reuse_works_as_expected() {
     config.workers = 1;
     config.keep_alive_timeout = Duration::from_secs(10);
 
-    let mut pool = Pool::new(config).unwrap();
+    let mut pool = Pool::builder(config).build().unwrap();
     let (tx, rx) = mpsc::channel();
 
     // Start first request
@@ -375,7 +375,7 @@ fn timeout_works_as_expected() {
     let mut config = default_config();
     config.transaction_timeout = Duration::from_secs(2);
 
-    let mut pool = Pool::new(config).unwrap();
+    let mut pool = Pool::builder(config).build().unwrap();
     let (tx, rx) = mpsc::channel();
 
     // Start first request
@@ -394,4 +394,60 @@ fn timeout_works_as_expected() {
     }
 
     pool.shutdown();
+}
+
+#[test]
+fn transaction_counting_works() {
+    let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
+
+    let _ = env_logger::try_init();
+
+    let mut config = default_config();
+    config.workers = 3;
+
+    let transaction_counters = Arc::new(RwLock::new(Vec::new()));
+
+    let mut pool = Pool::builder(config)
+        .transaction_counters(transaction_counters.clone())
+        .build().unwrap();
+    let (tx, rx) = mpsc::channel();
+
+    // Start requests
+    for _ in 0..3 {
+        pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
+    }
+
+    let mut saw_transactions = false;
+    let mut received = 0;
+    loop {
+        let counters = transaction_counters.try_read().unwrap();
+        for counter in counters.iter() {
+            assert_eq!(counter.is_valid(), true);
+            let transaction_count = counter.count();
+            if transaction_count == 1 {
+                saw_transactions = true;
+            }
+            assert!(transaction_count <= 1);
+        }
+
+        if let Ok(recv) = rx.try_recv() {
+            assert_successful_result(recv);
+            received += 1;
+
+            if received == 3 {
+                break;
+            }
+        }
+    }
+
+    // Make sure that we saw the counter was doing something
+    assert!(saw_transactions);
+
+    pool.shutdown();
+
+    // Counters should not be valid anymore
+    let counters = transaction_counters.try_read().unwrap();
+    for counter in counters.iter() {
+        assert_eq!(counter.is_valid(), false);
+    }
 }
