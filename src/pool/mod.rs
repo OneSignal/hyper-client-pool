@@ -32,7 +32,6 @@ impl<D: Deliverable> Pool<D> {
         PoolBuilder::new(config)
     }
 
-    /// Create a new pool according to config
     pub(in pool) fn new(builder: PoolBuilder<D>) -> Result<Pool<D>, SpawnError> {
         let PoolBuilder { mut config, transaction_counters, .. } = builder;
 
