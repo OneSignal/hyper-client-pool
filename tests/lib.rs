@@ -422,6 +422,7 @@ fn transaction_counting_works() {
     loop {
         let counters = transaction_counters.try_read().unwrap();
         for counter in counters.iter() {
+            assert_eq!(counter.is_valid(), true);
             let transaction_count = counter.count();
             if transaction_count == 1 {
                 saw_transactions = true;
@@ -443,4 +444,10 @@ fn transaction_counting_works() {
     assert!(saw_transactions);
 
     pool.shutdown();
+
+    // Counters should not be valid anymore
+    let counters = transaction_counters.try_read().unwrap();
+    for counter in counters.iter() {
+        assert_eq!(counter.is_valid(), false);
+    }
 }
