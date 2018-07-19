@@ -96,7 +96,7 @@ impl<D: Deliverable> Executor<D> {
         let tls = TlsConnector::builder().and_then(|builder| builder.build()).map_err(SpawnError::HttpsConnector)?;
 
         thread::Builder::new()
-            .name(format!("Hyper-Client-Pool Executor"))
+            .name(format!("HCP Executor"))
             .spawn(move || {
                 let mut runtime = Runtime::new().expect("Able to create current_thread::Runtime");
                 let handle = runtime.handle();
