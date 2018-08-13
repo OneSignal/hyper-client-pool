@@ -90,6 +90,7 @@ impl<D: Deliverable> Executor<D> {
         let weak_counter = WeakCounter::new();
         let weak_counter_clone = weak_counter.clone();
         let keep_alive_timeout = config.keep_alive_timeout;
+        let connection_max_use_count = config.connection_max_use_count;
         let transaction_timeout = config.transaction_timeout.clone();
         let dns_threads_per_worker = config.dns_threads_per_worker;
 
@@ -108,6 +109,7 @@ impl<D: Deliverable> Executor<D> {
                 let client = hyper::Client::builder()
                     .keep_alive(true)
                     .keep_alive_timeout(Some(keep_alive_timeout))
+                    .max_use_count(connection_max_use_count)
                     .build(connector);
 
                 let executor = Executor {
