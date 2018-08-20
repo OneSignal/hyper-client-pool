@@ -20,4 +20,8 @@ pub struct Config {
 
     /// Max number of times a connection can be used before it is closed
     pub connection_max_use_count: usize,
+
+    /// Maximum number of transactions that a worker
+    /// can run before it will be re-created
+    pub max_total_transactions_per_worker: usize,
 }

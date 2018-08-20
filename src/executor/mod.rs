@@ -31,6 +31,9 @@ pub(crate) struct Executor<D: Deliverable> {
     transaction_counter: WeakCounter,
     transaction_timeout: Duration,
     state: ExecutorState<D>,
+
+    max_total_transactions_per_worker: usize,
+    transactions_processed: usize,
 }
 
 /// The handle to the Executor. It lives on the Pool thread
@@ -93,6 +96,7 @@ impl<D: Deliverable> Executor<D> {
         let connection_max_use_count = config.connection_max_use_count;
         let transaction_timeout = config.transaction_timeout.clone();
         let dns_threads_per_worker = config.dns_threads_per_worker;
+        let max_total_transactions_per_worker = config.max_total_transactions_per_worker;
 
         let tls = TlsConnector::builder().and_then(|builder| builder.build()).map_err(SpawnError::HttpsConnector)?;
 
@@ -118,6 +122,8 @@ impl<D: Deliverable> Executor<D> {
                     transaction_counter: weak_counter_clone,
                     client,
                     transaction_timeout,
+                    max_total_transactions_per_worker,
+                    transactions_processed: 0,
                 };
 
                 if let Err(err) = runtime.block_on(executor) {
@@ -163,7 +169,13 @@ impl<D: Deliverable> Future for Executor<D> {
                                     self.transaction_timeout.clone(),
                                     counter
                                 );
-                            },
+
+                                self.transactions_processed += 1;
+                                if self.transactions_processed > self.max_total_transactions_per_worker {
+                                    state_changed = true;
+                                    break ExecutorState::Draining;
+                                }
+                            }
                             // No messages
                             Ok(Async::NotReady) => break ExecutorState::Running(receiver),
                             // All senders dropped or errored
