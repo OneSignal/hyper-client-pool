@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 log = "0.4"
-hyper = { git = "https://github.com/DarrenTsung/hyper.git", branch = "0.12.7-max-use-count" }
+hyper = "=0.12.7"
 native-tls = "0.1"
 hyper-tls = "0.2"
 futures = "0.1"
