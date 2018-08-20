@@ -41,6 +41,8 @@ fn default_config() -> Config {
         dns_threads_per_worker: 1,
         max_transactions_per_worker: 1_000,
         workers: 2,
+        connection_max_use_count: 1_000,
+        max_total_transactions_per_worker: 1_000,
     }
 }
 
@@ -199,11 +201,48 @@ fn full_error() {
 
     match pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))) {
         Err(err) => assert_eq!(err.kind, ErrorKind::PoolFull),
-        _ => panic!("Expected Error, got success request!"),
+        _ => panic!("Expected Error, got successful request!"),
     }
 
     for _ in 0..3 {
         assert_successful_result(rx.recv().unwrap());
+    }
+
+    pool.shutdown();
+}
+
+#[test]
+fn max_total_transactions_per_worker_works() {
+    let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
+
+    let _ = env_logger::try_init();
+
+    // 1 worker with 1 total transaction per worker, should be able to
+    // re-create workers and send all transactions successfully
+    let mut config = default_config();
+    config.workers = 1;
+    config.max_total_transactions_per_worker = 1;
+
+    let mut pool = Pool::builder(config).build().unwrap();
+    let (tx, rx) = mpsc::channel();
+
+    // Start requests, wait for each request to finish
+    for _ in 0..5 {
+        pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
+        assert_successful_result(rx.recv().unwrap());
+
+        // After the worker is invalid, it will need a pass to re-create itself
+        // This is a race condition depending on the Executor finishing, so we wait until
+        // we receive that error (PoolFull), which we know means that the thread is re-creating
+        loop {
+            match pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))) {
+                Err(err) => {
+                    assert_eq!(err.kind, ErrorKind::PoolFull);
+                    break;
+                },
+                _ => (), // ok
+            }
+        }
     }
 
     pool.shutdown();
