@@ -1,4 +1,5 @@
-#[macro_use] extern crate log;
+#[macro_use]
+extern crate log;
 
 extern crate fpool;
 extern crate futures;
@@ -18,9 +19,9 @@ mod pool;
 mod transaction;
 mod util;
 
-pub use executor::TransactionCounter;
-pub use deliverable::Deliverable;
-pub use transaction::{Transaction, DeliveryResult};
-pub use pool::Pool;
-pub use error::{Error, ErrorKind, SpawnError};
 pub use config::Config;
+pub use deliverable::Deliverable;
+pub use error::{Error, ErrorKind, SpawnError};
+pub use executor::TransactionCounter;
+pub use pool::Pool;
+pub use transaction::{DeliveryResult, Transaction};

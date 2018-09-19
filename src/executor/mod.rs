@@ -5,11 +5,11 @@ use std::mem;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use futures::{Poll, Future, Stream, Async};
 use futures::sync::mpsc as FuturesMpsc;
+use futures::{Async, Future, Poll, Stream};
+use hyper::{self, Client};
 use hyper_http_connector::HttpConnector;
 use hyper_tls::HttpsConnector;
-use hyper::{self, Client};
 use native_tls::TlsConnector;
 use tokio::runtime::current_thread::{Handle, Runtime};
 
@@ -94,7 +94,9 @@ impl<D: Deliverable> Executor<D> {
         let transaction_timeout = config.transaction_timeout.clone();
         let dns_threads_per_worker = config.dns_threads_per_worker;
 
-        let tls = TlsConnector::builder().and_then(|builder| builder.build()).map_err(SpawnError::HttpsConnector)?;
+        let tls = TlsConnector::builder()
+            .and_then(|builder| builder.build())
+            .map_err(SpawnError::HttpsConnector)?;
 
         thread::Builder::new()
             .name(format!("HCP Executor"))
@@ -125,17 +127,13 @@ impl<D: Deliverable> Executor<D> {
                 }
 
                 info!("Executor exited.");
-            })
-            .map(|join_handle| {
-                ExecutorHandle {
-                    transaction_counter: weak_counter,
-                    worker_counter: Counter::new(),
-                    max_transactions: config.max_transactions_per_worker,
-                    sender: tx,
-                    join_handle,
-                }
-            })
-            .map_err(SpawnError::ThreadSpawn)
+            }).map(|join_handle| ExecutorHandle {
+                transaction_counter: weak_counter,
+                worker_counter: Counter::new(),
+                max_transactions: config.max_transactions_per_worker,
+                sender: tx,
+                join_handle,
+            }).map_err(SpawnError::ThreadSpawn)
     }
 }
 
@@ -161,27 +159,27 @@ impl<D: Deliverable> Future for Executor<D> {
                                     &self.client,
                                     &self.handle,
                                     self.transaction_timeout.clone(),
-                                    counter
+                                    counter,
                                 );
-                            },
+                            }
                             // No messages
                             Ok(Async::NotReady) => break ExecutorState::Running(receiver),
                             // All senders dropped or errored
                             // (shouldn't be possible with () error type), shutdown
                             Ok(Async::Ready(None)) | Err(()) => {
                                 state_changed = true;
-                                break ExecutorState::Draining
-                            },
+                                break ExecutorState::Draining;
+                            }
                         }
                     }
-                },
+                }
                 ExecutorState::Draining => {
                     if self.transaction_counter.count() > 0 {
                         ExecutorState::Draining
                     } else {
                         return Ok(Async::Ready(()));
                     }
-                },
+                }
                 ExecutorState::Finished => panic!("Should not poll() after Executor is finished!"),
             };
 

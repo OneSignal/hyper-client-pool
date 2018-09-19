@@ -1,6 +1,6 @@
+use deliverable::Deliverable;
 use std::marker::PhantomData;
 use std::sync::{Arc, RwLock};
-use deliverable::Deliverable;
 
 use super::Pool;
 use config::Config;

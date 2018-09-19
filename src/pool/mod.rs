@@ -7,7 +7,7 @@ use fpool::RoundRobinPool;
 
 use config::Config;
 use deliverable::Deliverable;
-use error::{SpawnError, ErrorKind, Error, RequestError};
+use error::{Error, ErrorKind, RequestError, SpawnError};
 use executor::{Executor, ExecutorHandle};
 use transaction::Transaction;
 use util::RwLockExt;
@@ -33,30 +33,33 @@ impl<D: Deliverable> Pool<D> {
     }
 
     pub(in pool) fn new(builder: PoolBuilder<D>) -> Result<Pool<D>, SpawnError> {
-        let PoolBuilder { mut config, transaction_counters, .. } = builder;
+        let PoolBuilder {
+            mut config,
+            transaction_counters,
+            ..
+        } = builder;
 
         // Make sure config.workers is a reasonable value
         let num_workers = cmp::max(1, config.workers);
         config.workers = num_workers;
 
         let executor_handles = RoundRobinPool::builder(config.workers, move || {
-                let executor = Executor::spawn(&config);
+            let executor = Executor::spawn(&config);
 
-                // Push a transaction counter to the synchronized transaction_counters
-                // if executor creation was successful
-                if let (Ok(ref executor), Some(ref transaction_counters)) =
-                    (executor.as_ref(), transaction_counters.as_ref())
-                {
-                    transaction_counters.write_ignore_poison().push(executor.transaction_counter())
-                }
+            // Push a transaction counter to the synchronized transaction_counters
+            // if executor creation was successful
+            if let (Ok(ref executor), Some(ref transaction_counters)) =
+                (executor.as_ref(), transaction_counters.as_ref())
+            {
+                transaction_counters
+                    .write_ignore_poison()
+                    .push(executor.transaction_counter())
+            }
 
-                executor
-            })
-            .build()?;
+            executor
+        }).build()?;
 
-        Ok(Pool {
-            executor_handles,
-        })
+        Ok(Pool { executor_handles })
     }
 
     /// Start or queue a request
@@ -68,11 +71,7 @@ impl<D: Deliverable> Pool<D> {
         self.request_inner(transaction, size)
     }
 
-    fn request_inner(
-        &mut self,
-        transaction: Transaction<D>,
-        count: usize
-    ) -> Result<(), Error<D>> {
+    fn request_inner(&mut self, transaction: Transaction<D>, count: usize) -> Result<(), Error<D>> {
         if count == 0 {
             return Err(Error::new(ErrorKind::PoolFull, transaction));
         }
@@ -87,7 +86,7 @@ impl<D: Deliverable> Pool<D> {
                         // invalidate the thread as it didn't send
                         handle.invalidate();
                         transaction
-                    },
+                    }
                     Ok(_) => return Ok(()),
                 }
             }
@@ -101,7 +100,8 @@ impl<D: Deliverable> Pool<D> {
     /// Waits for all workers to be empty before stopping.
     pub fn shutdown(self) {
         let handles = self.executor_handles.into_items();
-        let join_handles : Vec<_> = handles.into_iter()
+        let join_handles: Vec<_> = handles
+            .into_iter()
             .map(|handle| handle.shutdown())
             .collect();
 

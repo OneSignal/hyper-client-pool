@@ -8,9 +8,12 @@ pub struct TransactionCounter {
 impl TransactionCounter {
     pub(crate) fn new(
         transaction_counter: WeakCounter,
-        worker_counter: WeakCounter
+        worker_counter: WeakCounter,
     ) -> TransactionCounter {
-        TransactionCounter { transaction_counter, worker_counter }
+        TransactionCounter {
+            transaction_counter,
+            worker_counter,
+        }
     }
 
     /// Get the count of transactions
