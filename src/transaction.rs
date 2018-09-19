@@ -1,16 +1,16 @@
 use std::fmt;
-use std::time::{Instant, Duration};
 use std::io::{self, ErrorKind};
+use std::time::{Duration, Instant};
 
-use futures::{Stream, Poll, Async, Future, task};
 use futures::future::{self, Either};
 use futures::task::Task;
+use futures::{task, Async, Future, Poll, Stream};
+use hyper::{self, Client, Request};
+use hyper::{Body, Response};
 use hyper_http_connector::HttpConnector;
 use hyper_tls::HttpsConnector;
-use hyper::{self, Request, Client};
-use hyper::{Body, Response};
-use tokio::timer::{Deadline, DeadlineError};
 use tokio::runtime::current_thread::Handle;
+use tokio::timer::{Deadline, DeadlineError};
 
 use deliverable::Deliverable;
 use raii_counter::Counter;
@@ -33,9 +33,7 @@ pub enum DeliveryResult {
     },
 
     /// Failed to connect within the timeout limit.
-    Timeout {
-        duration: Duration,
-    },
+    Timeout { duration: Duration },
 
     /// The timeout handling had an error.
     TimeoutError {
@@ -60,12 +58,15 @@ pub struct Transaction<D: Deliverable> {
 
 impl<D: Deliverable> fmt::Debug for Transaction<D> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Transaction {{ deliverable: (unknown), request: {:?} }}", self.request)
+        write!(
+            f,
+            "Transaction {{ deliverable: (unknown), request: {:?} }}",
+            self.request
+        )
     }
 }
 
-struct SpawnedTransaction<D: Deliverable, W: Future>
-{
+struct SpawnedTransaction<D: Deliverable, W: Future> {
     deliverable: Option<D>,
     work: W,
     _counter: Counter,
@@ -79,22 +80,17 @@ struct SpawnedTransaction<D: Deliverable, W: Future>
 
 impl<D: Deliverable, W: Future> Drop for SpawnedTransaction<D, W> {
     fn drop(&mut self) {
-        self.deliverable
-            .take()
-            .map(|deliverable| {
-                trace!("Dropping transaction..");
-                deliverable.complete(DeliveryResult::Dropped);
-            });
+        self.deliverable.take().map(|deliverable| {
+            trace!("Dropping transaction..");
+            deliverable.complete(DeliveryResult::Dropped);
+        });
     }
 }
 
 impl<D, W> Future for SpawnedTransaction<D, W>
 where
     D: Deliverable,
-    W: Future<
-        Item=(Response<Body>, Option<Vec<u8>>),
-        Error=DeadlineError<hyper::Error>,
-    >,
+    W: Future<Item = (Response<Body>, Option<Vec<u8>>), Error = DeadlineError<hyper::Error>>,
 {
     type Item = ();
     type Error = ();
@@ -106,18 +102,24 @@ where
                 let duration = self.start_time.elapsed();
                 if deadline_error.is_timer() {
                     let timer_error = deadline_error.into_timer().expect("is_timer -> into_timer");
-                    trace!("Timer around Transaction errored, error: {:?}, duration: {:?}", timer_error, duration);
+                    trace!(
+                        "Timer around Transaction errored, error: {:?}, duration: {:?}",
+                        timer_error,
+                        duration
+                    );
                     DeliveryResult::TimeoutError {
                         error: io::Error::new(ErrorKind::Other, timer_error),
                         duration,
                     }
                 } else if deadline_error.is_elapsed() {
-                    DeliveryResult::Timeout {
-                        duration,
-                    }
+                    DeliveryResult::Timeout { duration }
                 } else if deadline_error.is_inner() {
                     let hyper_error = deadline_error.into_inner().expect("is_inner -> into_inner");
-                    trace!("Transaction errored during delivery, error: {:?}, duration: {:?}", hyper_error, duration);
+                    trace!(
+                        "Transaction errored during delivery, error: {:?}, duration: {:?}",
+                        hyper_error,
+                        duration
+                    );
                     DeliveryResult::HyperError {
                         error: hyper_error,
                         duration,
@@ -125,10 +127,14 @@ where
                 } else {
                     unreachable!("Unexpected deadline_error!");
                 }
-            },
+            }
             Ok(Async::Ready((response, body))) => {
                 let duration = self.start_time.elapsed();
-                trace!("Finished transaction with response: {:?}, duration: {:?}", response, duration);
+                trace!(
+                    "Finished transaction with response: {:?}, duration: {:?}",
+                    response,
+                    duration
+                );
                 DeliveryResult::Response {
                     response,
                     body,
@@ -137,25 +143,19 @@ where
             }
         };
 
-        self.deliverable
-            .take()
-            .map(|deliverable| {
-                deliverable.complete(delivery_result);
-                // Notify the origin task as it might be waiting on the
-                // completion of the transaction to finish draining.
-                self.task.notify();
-            });
+        self.deliverable.take().map(|deliverable| {
+            deliverable.complete(delivery_result);
+            // Notify the origin task as it might be waiting on the
+            // completion of the transaction to finish draining.
+            self.task.notify();
+        });
 
         Ok(Async::Ready(()))
     }
 }
 
 impl<D: Deliverable> Transaction<D> {
-    pub fn new(
-        deliverable: D,
-        request: Request<Body>,
-        requires_body: bool,
-    ) -> Transaction<D> {
+    pub fn new(deliverable: D, request: Request<Body>, requires_body: bool) -> Transaction<D> {
         Transaction {
             deliverable,
             request,
@@ -168,41 +168,37 @@ impl<D: Deliverable> Transaction<D> {
         client: &Client<HttpsConnector<HttpConnector>>,
         handle: &Handle,
         timeout: Duration,
-        counter: Counter
+        counter: Counter,
     ) {
-        let Transaction { deliverable, request, requires_body } = self;
+        let Transaction {
+            deliverable,
+            request,
+            requires_body,
+        } = self;
         trace!("Spawning request: {:?}", request);
 
         let start_time = Instant::now();
         let task = task::current();
-        let request_future = client.request(request)
-            .and_then(move |response| {
-                if requires_body {
-                    let (parts, body) = response.into_parts();
-                    Either::A(
-                        body
-                        .fold(Vec::new(), |mut acc, chunk| {
-                            acc.extend_from_slice(&*chunk);
-                            future::ok::<_, hyper::Error>(acc)
-                        })
-                        .map(move |body| {
-                            (Response::from_parts(parts, Body::empty()), Some(body))
-                        })
-                    )
-                } else {
-                    // Note that you must consume the body if you want keepalive
-                    // to take affect.
-                    let (parts, body) = response.into_parts();
-                    Either::B(
-                        body
-                        .skip_while(|_| future::ok(true))
+        let request_future = client.request(request).and_then(move |response| {
+            if requires_body {
+                let (parts, body) = response.into_parts();
+                Either::A(
+                    body.fold(Vec::new(), |mut acc, chunk| {
+                        acc.extend_from_slice(&*chunk);
+                        future::ok::<_, hyper::Error>(acc)
+                    }).map(move |body| (Response::from_parts(parts, Body::empty()), Some(body))),
+                )
+            } else {
+                // Note that you must consume the body if you want keepalive
+                // to take affect.
+                let (parts, body) = response.into_parts();
+                Either::B(
+                    body.skip_while(|_| future::ok(true))
                         .collect()
-                        .map(|_| {
-                            (Response::from_parts(parts, Body::empty()), None)
-                        })
-                    )
-                }
-            });
+                        .map(|_| (Response::from_parts(parts, Body::empty()), None)),
+                )
+            }
+        });
 
         let deadline = Instant::now() + timeout;
         let work = Deadline::new(request_future, deadline);
@@ -225,16 +221,16 @@ impl<D: Deliverable> Transaction<D> {
 mod tests {
     extern crate env_logger;
 
+    use hyper;
+    use hyper::Request;
     use hyper_http_connector::HttpConnector;
     use hyper_tls::HttpsConnector;
-    use hyper;
     use native_tls::TlsConnector;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use std::sync::atomic::{Ordering, AtomicUsize};
     use std::thread;
+    use tokio::runtime::current_thread::{Handle, Runtime};
     use tokio::timer::Delay;
-    use tokio::runtime::current_thread::{Runtime, Handle};
-    use hyper::Request;
 
     use super::*;
 
@@ -286,10 +282,17 @@ mod tests {
             for _ in 0..TRANSACTION_SPAWN_COUNT {
                 let transaction = Transaction::new(
                     self.counter.clone(),
-                    Request::get("https://onesignal.com/").body(Body::empty()).unwrap(),
+                    Request::get("https://onesignal.com/")
+                        .body(Body::empty())
+                        .unwrap(),
                     false,
                 );
-                transaction.spawn_request(&self.client, &self.handle, Duration::from_secs(10), Counter::new());
+                transaction.spawn_request(
+                    &self.client,
+                    &self.handle,
+                    Duration::from_secs(10),
+                    Counter::new(),
+                );
             }
 
             Ok(Async::Ready(()))
@@ -297,12 +300,13 @@ mod tests {
     }
 
     fn test_hyper_client() -> hyper::Client<HttpsConnector<HttpConnector>> {
-        let tls = TlsConnector::builder().and_then(|builder| builder.build()).unwrap();
+        let tls = TlsConnector::builder()
+            .and_then(|builder| builder.build())
+            .unwrap();
         let mut http = HttpConnector::new(4);
         http.enforce_http(false);
         let connector = HttpsConnector::from((http, tls));
-        hyper::Client::builder()
-            .build(connector)
+        hyper::Client::builder().build(connector)
     }
 
     #[test]
@@ -324,9 +328,7 @@ mod tests {
                 let when = Instant::now() + Duration::from_secs(3);
                 Delay::new(when)
                     .map_err(|err| panic!("Error on delay: {:?}", err))
-                    .and_then(|_| {
-                        Ok(())
-                    })
+                    .and_then(|_| Ok(()))
             });
 
             // Run the transactions until the core finishes

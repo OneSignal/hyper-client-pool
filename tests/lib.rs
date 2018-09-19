@@ -1,4 +1,5 @@
-#[macro_use] extern crate lazy_static;
+#[macro_use]
+extern crate lazy_static;
 
 extern crate env_logger;
 extern crate hyper_client_pool;
@@ -7,14 +8,14 @@ extern crate regex;
 
 use std::net::IpAddr;
 use std::process::Command;
-use std::sync::{Arc, mpsc};
-use std::sync::atomic::{Ordering, AtomicUsize};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::RwLock;
+use std::sync::{mpsc, Arc};
 use std::thread;
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 
+use hyper::{Body, Request};
 use hyper_client_pool::*;
-use hyper::{Request, Body};
 use ipnet::{Contains, IpNet};
 use regex::Regex;
 
@@ -48,7 +49,9 @@ fn default_config() -> Config {
 fn onesignal_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
     Transaction::new(
         deliverable,
-        Request::get("https://onesignal.com/").body(Body::empty()).unwrap(),
+        Request::get("https://onesignal.com/")
+            .body(Body::empty())
+            .unwrap(),
         false,
     )
 }
@@ -56,17 +59,17 @@ fn onesignal_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
 fn httpbin_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
     Transaction::new(
         deliverable,
-        Request::get("http://httpbin:80/ip").body(Body::empty()).unwrap(),
+        Request::get("http://httpbin:80/ip")
+            .body(Body::empty())
+            .unwrap(),
         false,
     )
 }
 
 fn check_successful_result(result: DeliveryResult) -> (bool, DeliveryResult) {
     let successful = match result {
-        DeliveryResult::Response { ref response, .. } => {
-            response.status().is_success()
-        },
-        _ => false
+        DeliveryResult::Response { ref response, .. } => response.status().is_success(),
+        _ => false,
     };
     (successful, result)
 }
@@ -89,7 +92,8 @@ fn some_gets_single_worker() {
     let (tx, rx) = mpsc::channel();
 
     for _ in 0..5 {
-        pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
+        pool.request(onesignal_transaction(MspcDeliverable(tx.clone())))
+            .expect("request ok");
     }
 
     for _ in 0..5 {
@@ -101,7 +105,7 @@ fn some_gets_single_worker() {
 
 #[test]
 fn ton_of_gets() {
-    const REQUEST_AMOUNT : usize = 600;
+    const REQUEST_AMOUNT: usize = 600;
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
     let _ = env_logger::try_init();
@@ -116,7 +120,8 @@ fn ton_of_gets() {
     let (tx, rx) = mpsc::channel();
 
     for _ in 0..REQUEST_AMOUNT {
-        pool.request(httpbin_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
+        pool.request(httpbin_transaction(MspcDeliverable(tx.clone())))
+            .expect("request ok");
     }
 
     let mut successes = 0;
@@ -134,7 +139,10 @@ fn ton_of_gets() {
     assert!(not_successes < ((REQUEST_AMOUNT as f32) * 0.1) as _);
 
     pool.shutdown();
-    println!("Successes: {} | Not Successes: {}", successes, not_successes);
+    println!(
+        "Successes: {} | Not Successes: {}",
+        successes, not_successes
+    );
 }
 
 #[derive(Debug, Clone)]
@@ -144,7 +152,9 @@ struct SuccessfulCompletionCounter {
 
 impl SuccessfulCompletionCounter {
     fn new() -> SuccessfulCompletionCounter {
-        SuccessfulCompletionCounter { count: Arc::new(AtomicUsize::new(0)) }
+        SuccessfulCompletionCounter {
+            count: Arc::new(AtomicUsize::new(0)),
+        }
     }
 
     fn count(&self) -> usize {
@@ -173,7 +183,8 @@ fn graceful_shutdown() {
 
     let mut pool = Pool::builder(config).build().unwrap();
     for _ in 0..txn {
-        pool.request(onesignal_transaction(counter.clone())).expect("request ok");
+        pool.request(onesignal_transaction(counter.clone()))
+            .expect("request ok");
     }
 
     pool.shutdown();
@@ -195,7 +206,8 @@ fn full_error() {
 
     // Start requests
     for _ in 0..3 {
-        pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
+        pool.request(onesignal_transaction(MspcDeliverable(tx.clone())))
+            .expect("request ok");
     }
 
     match pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))) {
@@ -226,7 +238,6 @@ static CLOUDFLARE_NETS: &[&str] = &[
     "190.93.240.0/20",
     "197.234.240.0/22",
     "198.41.128.0/17",
-
     // IPv6
     "2400:cb00::/32",
     "2405:8100::/32",
@@ -239,14 +250,13 @@ static CLOUDFLARE_NETS: &[&str] = &[
 
 lazy_static! {
     static ref CLOUDFLARE_PARSED_NETS: Vec<IpNet> = {
-        CLOUDFLARE_NETS.iter()
+        CLOUDFLARE_NETS
+            .iter()
             .map(|net| net.parse::<IpNet>())
-            .collect::<Result<Vec<IpNet>, _>>().unwrap()
+            .collect::<Result<Vec<IpNet>, _>>()
+            .unwrap()
     };
-
-    static ref LSOF_PARSE_IP_REGEX: Regex = {
-        Regex::new(r"->\[?([^\]]*)\]?:https").unwrap()
-    };
+    static ref LSOF_PARSE_IP_REGEX: Regex = { Regex::new(r"->\[?([^\]]*)\]?:https").unwrap() };
 }
 
 fn matches_cloudflare_ip(input: &str) -> bool {
@@ -277,7 +287,8 @@ fn onesignal_connection_count() -> (usize, String) {
         .expect("command works");
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let matching_lines = stdout.split("\n")
+    let matching_lines = stdout
+        .split("\n")
         .filter(|line| matches_cloudflare_ip(line))
         .count();
 
@@ -308,7 +319,8 @@ fn keep_alive_works_as_expected() {
     let (tx, rx) = mpsc::channel();
 
     // Start first request
-    pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
+    pool.request(onesignal_transaction(MspcDeliverable(tx.clone())))
+        .expect("request ok");
 
     // wait for request to finish
     assert_successful_result(rx.recv().unwrap());
@@ -348,7 +360,8 @@ fn connection_reuse_works_as_expected() {
     let (tx, rx) = mpsc::channel();
 
     // Start first request
-    pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
+    pool.request(onesignal_transaction(MspcDeliverable(tx.clone())))
+        .expect("request ok");
     // wait for request to finish
     assert_successful_result(rx.recv().unwrap());
 
@@ -357,7 +370,8 @@ fn connection_reuse_works_as_expected() {
     assert_onesignal_connection_open_count_eq!(1);
 
     // Start second request
-    pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
+    pool.request(onesignal_transaction(MspcDeliverable(tx.clone())))
+        .expect("request ok");
     // wait for request to finish
     assert_successful_result(rx.recv().unwrap());
 
@@ -384,9 +398,11 @@ fn timeout_works_as_expected() {
         // This endpoint will not return for a while, therefore should timeout
         Transaction::new(
             MspcDeliverable(tx.clone()),
-            Request::get("https://httpstat.us/200?sleep=5000").body(Body::empty()).unwrap(),
+            Request::get("https://httpstat.us/200?sleep=5000")
+                .body(Body::empty())
+                .unwrap(),
             false,
-        )
+        ),
     ).expect("request ok");
 
     match rx.recv().unwrap() {
@@ -410,12 +426,14 @@ fn transaction_counting_works() {
 
     let mut pool = Pool::builder(config)
         .transaction_counters(transaction_counters.clone())
-        .build().unwrap();
+        .build()
+        .unwrap();
     let (tx, rx) = mpsc::channel();
 
     // Start requests
     for _ in 0..3 {
-        pool.request(onesignal_transaction(MspcDeliverable(tx.clone()))).expect("request ok");
+        pool.request(onesignal_transaction(MspcDeliverable(tx.clone())))
+            .expect("request ok");
     }
 
     let mut saw_transactions = false;
