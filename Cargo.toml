@@ -15,6 +15,8 @@ tokio = ">=0.1.7"
 fpool = "~0.3.1"
 raii-counter = "0.1"
 hyper-http-connector = { git = "https://github.com/DarrenTsung/hyper-http-connector.git", branch = "hyper-0.12-c-ares" }
+antidote = "1.0.0"
+lazy_static = "1.1.0"
 
 [dev-dependencies]
 env_logger = "0.5"

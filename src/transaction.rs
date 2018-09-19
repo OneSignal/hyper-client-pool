@@ -186,16 +186,22 @@ impl<D: Deliverable> Transaction<D> {
                     body.fold(Vec::new(), |mut acc, chunk| {
                         acc.extend_from_slice(&*chunk);
                         future::ok::<_, hyper::Error>(acc)
-                    }).map(move |body| (Response::from_parts(parts, Body::empty()), Some(body))),
+                    }).map(move |body| {
+                        ::stats::response_size_received(body.len());
+                        (Response::from_parts(parts, Body::empty()), Some(body))
+                    }),
                 )
             } else {
                 // Note that you must consume the body if you want keepalive
                 // to take affect.
                 let (parts, body) = response.into_parts();
                 Either::B(
-                    body.skip_while(|_| future::ok(true))
-                        .collect()
-                        .map(|_| (Response::from_parts(parts, Body::empty()), None)),
+                    body.fold(0, |acc, chunk| {
+                        future::ok::<_, hyper::Error>(acc + chunk.len())
+                    }).map(|body_length| {
+                        ::stats::response_size_received(body_length);
+                        (Response::from_parts(parts, Body::empty()), None)
+                    }),
                 )
             }
         });
