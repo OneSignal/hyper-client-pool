@@ -29,6 +29,7 @@ pub enum DeliveryResult {
     Response {
         response: Response<Body>,
         body: Option<Vec<u8>>,
+        body_size: usize,
         duration: Duration,
     },
 
@@ -90,7 +91,7 @@ impl<D: Deliverable, W: Future> Drop for SpawnedTransaction<D, W> {
 impl<D, W> Future for SpawnedTransaction<D, W>
 where
     D: Deliverable,
-    W: Future<Item = (Response<Body>, Option<Vec<u8>>), Error = DeadlineError<hyper::Error>>,
+    W: Future<Item = (Response<Body>, Option<Vec<u8>>, usize), Error = DeadlineError<hyper::Error>>,
 {
     type Item = ();
     type Error = ();
@@ -128,7 +129,7 @@ where
                     unreachable!("Unexpected deadline_error!");
                 }
             }
-            Ok(Async::Ready((response, body))) => {
+            Ok(Async::Ready((response, body, body_size))) => {
                 let duration = self.start_time.elapsed();
                 trace!(
                     "Finished transaction with response: {:?}, duration: {:?}",
@@ -138,6 +139,7 @@ where
                 DeliveryResult::Response {
                     response,
                     body,
+                    body_size,
                     duration,
                 }
             }
@@ -186,16 +188,25 @@ impl<D: Deliverable> Transaction<D> {
                     body.fold(Vec::new(), |mut acc, chunk| {
                         acc.extend_from_slice(&*chunk);
                         future::ok::<_, hyper::Error>(acc)
-                    }).map(move |body| (Response::from_parts(parts, Body::empty()), Some(body))),
+                    }).map(move |body| {
+                        let body_size = body.len();
+                        (
+                            Response::from_parts(parts, Body::empty()),
+                            Some(body),
+                            body_size,
+                        )
+                    }),
                 )
             } else {
                 // Note that you must consume the body if you want keepalive
                 // to take affect.
                 let (parts, body) = response.into_parts();
                 Either::B(
-                    body.skip_while(|_| future::ok(true))
-                        .collect()
-                        .map(|_| (Response::from_parts(parts, Body::empty()), None)),
+                    body.fold(0, |acc, chunk| {
+                        future::ok::<_, hyper::Error>(acc + chunk.len())
+                    }).map(|body_size| {
+                        (Response::from_parts(parts, Body::empty()), None, body_size)
+                    }),
                 )
             }
         });
