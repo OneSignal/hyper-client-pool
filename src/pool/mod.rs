@@ -14,7 +14,7 @@ use util::RwLockExt;
 
 mod builder;
 
-pub use self::builder::PoolBuilder;
+pub use self::builder::{ConnectorAdaptor, DefaultConnectorAdapator, PoolBuilder, PoolConnector};
 
 /// A pool of [`hyper::Client`]s.
 ///
@@ -32,7 +32,11 @@ impl<D: Deliverable> Pool<D> {
         PoolBuilder::new(config)
     }
 
-    pub(in pool) fn new(builder: PoolBuilder<D>) -> Result<Pool<D>, SpawnError> {
+    pub(in pool) fn new<A>(builder: PoolBuilder<D>) -> Result<Pool<D>, SpawnError>
+    where
+        A: ConnectorAdaptor,
+        A::Connect: 'static,
+    {
         let PoolBuilder {
             mut config,
             transaction_counters,
@@ -44,7 +48,7 @@ impl<D: Deliverable> Pool<D> {
         config.workers = num_workers;
 
         let executor_handles = RoundRobinPool::builder(config.workers, move || {
-            let executor = Executor::spawn(&config);
+            let executor = Executor::spawn::<A>(&config);
 
             // Push a transaction counter to the synchronized transaction_counters
             // if executor creation was successful

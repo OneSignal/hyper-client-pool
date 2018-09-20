@@ -5,10 +5,9 @@ use std::time::{Duration, Instant};
 use futures::future::{self, Either};
 use futures::task::Task;
 use futures::{task, Async, Future, Poll, Stream};
+use hyper::client::connect::Connect;
 use hyper::{self, Client, Request};
 use hyper::{Body, Response};
-use hyper_http_connector::HttpConnector;
-use hyper_tls::HttpsConnector;
 use tokio::runtime::current_thread::Handle;
 use tokio::timer::{Deadline, DeadlineError};
 
@@ -165,9 +164,9 @@ impl<D: Deliverable> Transaction<D> {
         }
     }
 
-    pub(crate) fn spawn_request(
+    pub(crate) fn spawn_request<C: 'static + Connect>(
         self,
-        client: &Client<HttpsConnector<HttpConnector>>,
+        client: &Client<C>,
         handle: &Handle,
         timeout: Duration,
         counter: Counter,

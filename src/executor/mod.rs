@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use futures::sync::mpsc as FuturesMpsc;
 use futures::{Async, Future, Poll, Stream};
+use hyper::client::connect::Connect;
 use hyper::{self, Client};
 use hyper_http_connector::HttpConnector;
 use hyper_tls::HttpsConnector;
@@ -16,6 +17,7 @@ use tokio::runtime::current_thread::{Handle, Runtime};
 use config::Config;
 use deliverable::Deliverable;
 use error::{RequestError, SpawnError};
+use pool::ConnectorAdaptor;
 use raii_counter::{Counter, WeakCounter};
 use transaction::Transaction;
 
@@ -25,8 +27,8 @@ pub use self::transaction_counter::TransactionCounter;
 
 /// Lives on a separate thread running a tokio_core::Reactor
 /// and runs Transactions sent by the Pool.
-pub(crate) struct Executor<D: Deliverable> {
-    client: Client<HttpsConnector<HttpConnector>>,
+pub(crate) struct Executor<D: Deliverable, C: 'static + Connect> {
+    client: Client<C>,
     handle: Handle,
     transaction_counter: WeakCounter,
     transaction_timeout: Duration,
@@ -84,8 +86,11 @@ impl<D: Deliverable> ExecutorHandle<D> {
     }
 }
 
-impl<D: Deliverable> Executor<D> {
-    pub fn spawn(config: &Config) -> Result<ExecutorHandle<D>, SpawnError> {
+impl<D: Deliverable, C: 'static + Connect> Executor<D, C> {
+    pub fn spawn<A>(config: &Config) -> Result<ExecutorHandle<D>, SpawnError>
+    where
+        A: ConnectorAdaptor<Connect = C>,
+    {
         let (tx, rx) = FuturesMpsc::unbounded();
         let weak_counter = WeakCounter::new();
         let weak_counter_clone = weak_counter.clone();
@@ -107,14 +112,15 @@ impl<D: Deliverable> Executor<D> {
                 let mut http = HttpConnector::new(dns_threads_per_worker);
                 http.enforce_http(false);
                 http.set_keepalive(Some(keep_alive_timeout));
-                let connector = HttpsConnector::from((http, tls));
+                let connector = A::wrap(HttpsConnector::from((http, tls)));
+
                 let client = hyper::Client::builder()
                     .keep_alive(true)
                     .keep_alive_timeout(Some(keep_alive_timeout))
                     .max_use_count(connection_max_use_count)
                     .build(connector);
 
-                let executor = Executor {
+                let executor = Executor::<D, C> {
                     state: ExecutorState::Running(rx),
                     handle,
                     transaction_counter: weak_counter_clone,
@@ -137,7 +143,7 @@ impl<D: Deliverable> Executor<D> {
     }
 }
 
-impl<D: Deliverable> Future for Executor<D> {
+impl<D: Deliverable, C: 'static + Connect> Future for Executor<D, C> {
     type Item = ();
     type Error = ();
 
