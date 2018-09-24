@@ -42,7 +42,6 @@ fn default_config() -> Config {
         dns_threads_per_worker: 1,
         max_transactions_per_worker: 1_000,
         workers: 2,
-        connection_max_use_count: 1_000,
     }
 }
 

@@ -17,7 +17,4 @@ pub struct Config {
 
     /// Number of workers in the pool
     pub workers: usize,
-
-    /// Max number of times a connection can be used before it is closed
-    pub connection_max_use_count: usize,
 }
