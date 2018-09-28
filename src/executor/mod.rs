@@ -110,6 +110,12 @@ impl<D: Deliverable, C: 'static + Connect> Executor<D, C> {
 
                 let mut http = HttpConnector::new(dns_threads_per_worker);
                 http.enforce_http(false);
+                // Set TCP_NODELAY to true to turn off Nagle's algorithm, an algorithm that
+                // buffers sending / receiving data in packets which may be slowing down
+                // our network traffic.
+                //
+                // See a relevant article: https://www.extrahop.com/company/blog/2016/tcp-nodelay-nagle-quickack-best-practices/
+                http.set_nodelay(true);
                 http.set_keepalive(Some(keep_alive_timeout));
                 let connector = A::wrap(HttpsConnector::from((http, tls)));
 
