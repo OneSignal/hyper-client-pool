@@ -98,10 +98,7 @@ impl<D: Deliverable, C: 'static + Connect> Executor<D, C> {
         let transaction_timeout = config.transaction_timeout.clone();
         let dns_threads_per_worker = config.dns_threads_per_worker;
 
-        let tls = TlsConnector::builder()
-            .and_then(|builder| builder.build())
-            .map_err(SpawnError::HttpsConnector)?;
-
+        let tls = TlsConnector::builder().build().map_err(SpawnError::HttpsConnector)?;
         thread::Builder::new()
             .name(format!("HCP Executor"))
             .spawn(move || {

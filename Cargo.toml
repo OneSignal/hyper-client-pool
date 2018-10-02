@@ -1,6 +1,6 @@
 [package]
 name = "hyper-client-pool"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Joe Wilm <joe@jwilm.com>"]
 description = "Pooled Hyper Async Clients"
 license = "MIT OR Apache-2.0"
@@ -8,8 +8,8 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 log = "0.4"
 hyper = "0.12.7"
-native-tls = "0.1"
-hyper-tls = "0.2"
+native-tls = "0.2"
+hyper-tls = "0.3"
 futures = "0.1"
 tokio = ">=0.1.7"
 fpool = "~0.3.1"

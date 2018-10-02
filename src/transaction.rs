@@ -310,9 +310,7 @@ mod tests {
     }
 
     fn test_hyper_client() -> hyper::Client<HttpsConnector<HttpConnector>> {
-        let tls = TlsConnector::builder()
-            .and_then(|builder| builder.build())
-            .unwrap();
+        let tls = TlsConnector::builder().build().unwrap();
         let mut http = HttpConnector::new(4);
         http.enforce_http(false);
         let connector = HttpsConnector::from((http, tls));
