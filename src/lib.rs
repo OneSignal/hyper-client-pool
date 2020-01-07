@@ -3,7 +3,6 @@ extern crate log;
 
 extern crate fpool;
 extern crate futures;
-extern crate hyper_http_connector;
 extern crate hyper_tls;
 extern crate native_tls;
 extern crate raii_counter;

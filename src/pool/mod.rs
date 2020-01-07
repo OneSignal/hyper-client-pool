@@ -5,12 +5,12 @@ use std::cmp;
 
 use fpool::RoundRobinPool;
 
-use config::Config;
-use deliverable::Deliverable;
-use error::{Error, ErrorKind, RequestError, SpawnError};
-use executor::{Executor, ExecutorHandle};
-use transaction::Transaction;
-use util::RwLockExt;
+use crate::config::Config;
+use crate::deliverable::Deliverable;
+use crate::error::{Error, ErrorKind, RequestError, SpawnError};
+use crate::executor::{Executor, ExecutorHandle};
+use crate::transaction::Transaction;
+use crate::util::RwLockExt;
 
 mod builder;
 
@@ -32,10 +32,10 @@ impl<D: Deliverable> Pool<D> {
         PoolBuilder::new(config)
     }
 
-    pub(in pool) fn new<A>(builder: PoolBuilder<D>) -> Result<Pool<D>, SpawnError>
+    pub(in crate::pool) fn new<A>(builder: PoolBuilder<D>) -> Result<Pool<D>, SpawnError>
     where
         A: ConnectorAdaptor,
-        A::Connect: 'static,
+        A::Connect: 'static + Clone + Send + Sync,
     {
         let PoolBuilder {
             mut config,
@@ -61,7 +61,8 @@ impl<D: Deliverable> Pool<D> {
             }
 
             executor
-        }).build()?;
+        })
+        .build()?;
 
         Ok(Pool { executor_handles })
     }
@@ -102,15 +103,13 @@ impl<D: Deliverable> Pool<D> {
     /// Shutdown the pool
     ///
     /// Waits for all workers to be empty before stopping.
-    pub fn shutdown(self) {
+    pub async fn shutdown(self) {
         let handles = self.executor_handles.into_items();
         let join_handles: Vec<_> = handles
             .into_iter()
             .map(|handle| handle.shutdown())
             .collect();
 
-        for join_handle in join_handles.into_iter() {
-            let _ = join_handle.join();
-        }
+        futures::future::join_all(join_handles).await;
     }
 }

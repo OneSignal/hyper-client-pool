@@ -1,14 +1,13 @@
-use deliverable::Deliverable;
-use hyper::client::connect::Connect;
-use hyper_http_connector::HttpConnector;
+use crate::deliverable::Deliverable;
+use hyper::client::{connect::Connect, HttpConnector};
 use hyper_tls::HttpsConnector;
 use std::marker::PhantomData;
 use std::sync::{Arc, RwLock};
 
 use super::Pool;
-use config::Config;
-use error::SpawnError;
-use executor::TransactionCounter;
+use crate::config::Config;
+use crate::error::SpawnError;
+use crate::executor::TransactionCounter;
 
 pub type PoolConnector = HttpsConnector<HttpConnector>;
 
@@ -24,14 +23,14 @@ pub trait ConnectorAdaptor {
 pub struct DefaultConnectorAdapator;
 
 pub struct PoolBuilder<D: Deliverable> {
-    pub(in pool) config: Config,
-    pub(in pool) transaction_counters: Option<Arc<RwLock<Vec<TransactionCounter>>>>,
+    pub(in crate::pool) config: Config,
+    pub(in crate::pool) transaction_counters: Option<Arc<RwLock<Vec<TransactionCounter>>>>,
 
     _d: PhantomData<D>,
 }
 
 impl<D: Deliverable> PoolBuilder<D> {
-    pub(in pool) fn new(config: Config) -> PoolBuilder<D> {
+    pub(in crate::pool) fn new(config: Config) -> PoolBuilder<D> {
         PoolBuilder {
             config,
             transaction_counters: None,
@@ -49,7 +48,7 @@ impl<D: Deliverable> PoolBuilder<D> {
     pub fn build_with_adaptor<C>(self) -> Result<Pool<D>, SpawnError>
     where
         C: ConnectorAdaptor,
-        C::Connect: 'static,
+        C::Connect: 'static + Send + Sync + Clone,
     {
         Pool::new::<C>(self)
     }

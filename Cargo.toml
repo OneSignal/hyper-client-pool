@@ -4,20 +4,22 @@ version = "0.2.0"
 authors = ["Joe Wilm <joe@jwilm.com>"]
 description = "Pooled Hyper Async Clients"
 license = "MIT OR Apache-2.0"
+edition = "2018"
 
 [dependencies]
 log = "0.4"
-hyper = "0.12.7"
+hyper = "0.13"
 native-tls = "0.2"
-hyper-tls = "0.3"
-futures = "0.1"
-tokio = ">=0.1.7"
+hyper-tls = "0.4"
+tokio-tls = "0.3"
+futures = "0.3"
+tokio = { version = "0.2", features = ["time"] }
 fpool = "~0.3.1"
 raii-counter = "0.1"
-hyper-http-connector = "0.1"
 
 [dev-dependencies]
 env_logger = "0.5"
 lazy_static = "1.0"
 ipnet = "1.2"
 regex = "1.0"
+tokio = { version = "0.2", features = ["macros"] }

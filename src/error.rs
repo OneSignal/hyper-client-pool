@@ -1,15 +1,13 @@
 use std::io;
 
-use hyper_tls;
-
-use deliverable::Deliverable;
-use transaction::Transaction;
+use crate::deliverable::Deliverable;
+use crate::transaction::Transaction;
 
 /// Error when spawning and configuring the thread that the [`hyper::Client`]s run on.
 #[derive(Debug)]
 pub enum SpawnError {
     ThreadSpawn(io::Error),
-    HttpsConnector(hyper_tls::Error),
+    HttpsConnector(native_tls::Error),
 }
 
 impl PartialEq for SpawnError {
@@ -24,6 +22,12 @@ impl PartialEq for SpawnError {
                 _ => false,
             },
         }
+    }
+}
+
+impl From<native_tls::Error> for SpawnError {
+    fn from(err: native_tls::Error) -> SpawnError {
+        SpawnError::HttpsConnector(err)
     }
 }
 

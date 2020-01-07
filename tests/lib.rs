@@ -78,8 +78,8 @@ fn assert_successful_result(result: DeliveryResult) {
     assert_eq!(true, successful, "Not successful result: {:?}!", result);
 }
 
-#[test]
-fn some_gets_single_worker() {
+#[tokio::test]
+async fn some_gets_single_worker() {
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
     let _ = env_logger::try_init();
@@ -99,11 +99,11 @@ fn some_gets_single_worker() {
         assert_successful_result(rx.recv().unwrap());
     }
 
-    pool.shutdown();
+    pool.shutdown().await;
 }
 
-#[test]
-fn ton_of_gets() {
+#[tokio::test]
+async fn ton_of_gets() {
     const REQUEST_AMOUNT: usize = 600;
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
@@ -137,7 +137,7 @@ fn ton_of_gets() {
     assert!(successes > ((REQUEST_AMOUNT as f32) * 0.9) as _);
     assert!(not_successes < ((REQUEST_AMOUNT as f32) * 0.1) as _);
 
-    pool.shutdown();
+    pool.shutdown().await;
     println!(
         "Successes: {} | Not Successes: {}",
         successes, not_successes
@@ -168,8 +168,8 @@ impl Deliverable for SuccessfulCompletionCounter {
     }
 }
 
-#[test]
-fn graceful_shutdown() {
+#[tokio::test]
+async fn graceful_shutdown() {
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
     let _ = env_logger::try_init();
@@ -186,12 +186,12 @@ fn graceful_shutdown() {
             .expect("request ok");
     }
 
-    pool.shutdown();
+    pool.shutdown().await;
     assert_eq!(counter.count(), txn);
 }
 
-#[test]
-fn full_error() {
+#[tokio::test]
+async fn full_error() {
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
     let _ = env_logger::try_init();
@@ -218,7 +218,7 @@ fn full_error() {
         assert_successful_result(rx.recv().unwrap());
     }
 
-    pool.shutdown();
+    pool.shutdown().await;
 }
 
 static CLOUDFLARE_NETS: &[&str] = &[
@@ -301,8 +301,8 @@ macro_rules! assert_onesignal_connection_open_count_eq {
     };
 }
 
-#[test]
-fn keep_alive_works_as_expected() {
+#[tokio::test]
+async fn keep_alive_works_as_expected() {
     let _write = TEST_LOCK.write().unwrap_or_else(|e| e.into_inner());
 
     // block until no connections are open - this is unfortunate..
@@ -336,11 +336,11 @@ fn keep_alive_works_as_expected() {
         thread::sleep(Duration::from_millis(100));
     }
 
-    pool.shutdown();
+    pool.shutdown().await;
 }
 
-#[test]
-fn connection_reuse_works_as_expected() {
+#[tokio::test]
+async fn connection_reuse_works_as_expected() {
     let _write = TEST_LOCK.write().unwrap_or_else(|e| e.into_inner());
 
     // block until no connections are open - this is unfortunate..
@@ -377,11 +377,11 @@ fn connection_reuse_works_as_expected() {
     // there should only be one connection open
     assert_onesignal_connection_open_count_eq!(1);
 
-    pool.shutdown();
+    pool.shutdown().await;
 }
 
-#[test]
-fn timeout_works_as_expected() {
+#[tokio::test]
+async fn timeout_works_as_expected() {
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
     let _ = env_logger::try_init();
@@ -402,18 +402,19 @@ fn timeout_works_as_expected() {
                 .unwrap(),
             false,
         ),
-    ).expect("request ok");
+    )
+    .expect("request ok");
 
     match rx.recv().unwrap() {
         DeliveryResult::Timeout { .. } => (), // ok
         res => panic!("Expected timeout!, got: {:?}", res),
     }
 
-    pool.shutdown();
+    pool.shutdown().await;
 }
 
-#[test]
-fn transaction_counting_works() {
+#[tokio::test]
+async fn transaction_counting_works() {
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
     let _ = env_logger::try_init();
@@ -461,7 +462,7 @@ fn transaction_counting_works() {
     // Make sure that we saw the counter was doing something
     assert!(saw_transactions);
 
-    pool.shutdown();
+    pool.shutdown().await;
 
     // Counters should not be valid anymore
     let counters = transaction_counters.try_read().unwrap();

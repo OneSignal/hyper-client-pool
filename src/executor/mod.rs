@@ -1,25 +1,22 @@
 //! HTTP Client Worker Pool
 //!
 //! This module provides a simple API wrapping a pool of HTTP clients
-use std::mem;
-use std::thread::{self, JoinHandle};
+use std::sync::Arc;
 use std::time::Duration;
 
-use futures::sync::mpsc as FuturesMpsc;
-use futures::{Async, Future, Poll, Stream};
-use hyper::client::connect::Connect;
+use futures::channel::mpsc as FuturesMpsc;
+use futures::prelude::*;
+use hyper::client::connect::{Connect, HttpConnector};
 use hyper::{self, Client};
-use hyper_http_connector::HttpConnector;
 use hyper_tls::HttpsConnector;
-use native_tls::TlsConnector;
-use tokio::runtime::current_thread::{Handle, Runtime};
+use tokio::task::JoinHandle;
 
-use config::Config;
-use deliverable::Deliverable;
-use error::{RequestError, SpawnError};
-use pool::ConnectorAdaptor;
+use crate::config::Config;
+use crate::deliverable::Deliverable;
+use crate::error::{RequestError, SpawnError};
+use crate::pool::ConnectorAdaptor;
+use crate::transaction::Transaction;
 use raii_counter::{Counter, WeakCounter};
-use transaction::Transaction;
 
 mod transaction_counter;
 
@@ -28,11 +25,10 @@ pub use self::transaction_counter::TransactionCounter;
 /// Lives on a separate thread running a tokio_core::Reactor
 /// and runs Transactions sent by the Pool.
 pub(crate) struct Executor<D: Deliverable, C: 'static + Connect> {
-    client: Client<C>,
-    handle: Handle,
+    client: Arc<Client<C>>,
     transaction_counter: WeakCounter,
     transaction_timeout: Duration,
-    state: ExecutorState<D>,
+    receiver: FuturesMpsc::UnboundedReceiver<ExecutorMessage<D>>,
 }
 
 /// The handle to the Executor. It lives on the Pool thread
@@ -44,12 +40,6 @@ pub(crate) struct ExecutorHandle<D: Deliverable> {
 
     sender: FuturesMpsc::UnboundedSender<ExecutorMessage<D>>,
     join_handle: JoinHandle<()>,
-}
-
-enum ExecutorState<D: Deliverable> {
-    Running(FuturesMpsc::UnboundedReceiver<ExecutorMessage<D>>),
-    Draining,
-    Finished,
 }
 
 type ExecutorMessage<D> = (Transaction<D>, Counter);
@@ -86,7 +76,7 @@ impl<D: Deliverable> ExecutorHandle<D> {
     }
 }
 
-impl<D: Deliverable, C: 'static + Connect> Executor<D, C> {
+impl<D: Deliverable, C: 'static + Connect + Clone + Send + Sync> Executor<D, C> {
     pub fn spawn<A>(config: &Config) -> Result<ExecutorHandle<D>, SpawnError>
     where
         A: ConnectorAdaptor<Connect = C>,
@@ -96,105 +86,61 @@ impl<D: Deliverable, C: 'static + Connect> Executor<D, C> {
         let weak_counter_clone = weak_counter.clone();
         let keep_alive_timeout = config.keep_alive_timeout;
         let transaction_timeout = config.transaction_timeout.clone();
-        let dns_threads_per_worker = config.dns_threads_per_worker;
 
-        let tls = TlsConnector::builder().build().map_err(SpawnError::HttpsConnector)?;
-        thread::Builder::new()
-            .name(format!("HCP Executor"))
-            .spawn(move || {
-                let mut runtime = Runtime::new().expect("Able to create current_thread::Runtime");
-                let handle = runtime.handle();
+        let tls = tokio_tls::TlsConnector::from(native_tls::TlsConnector::new()?);
 
-                let mut http = HttpConnector::new(dns_threads_per_worker);
-                http.enforce_http(false);
-                // Set TCP_NODELAY to true to turn off Nagle's algorithm, an algorithm that
-                // buffers sending / receiving data in packets which may be slowing down
-                // our network traffic.
-                //
-                // See a relevant article: https://www.extrahop.com/company/blog/2016/tcp-nodelay-nagle-quickack-best-practices/
-                http.set_nodelay(true);
-                http.set_keepalive(Some(keep_alive_timeout));
-                let connector = A::wrap(HttpsConnector::from((http, tls)));
+        let mut http = HttpConnector::new();
+        http.enforce_http(false);
+        // Set TCP_NODELAY to true to turn off Nagle's algorithm, an algorithm that
+        // buffers sending / receiving data in packets which may be slowing down
+        // our network traffic.
+        //
+        // See a relevant article: https://www.extrahop.com/company/blog/2016/tcp-nodelay-nagle-quickack-best-practices/
+        http.set_nodelay(true);
+        http.set_keepalive(Some(keep_alive_timeout));
+        let connector = A::wrap(HttpsConnector::from((http, tls)));
 
-                let client = hyper::Client::builder()
-                    .keep_alive(true)
-                    .keep_alive_timeout(Some(keep_alive_timeout))
-                    .build(connector);
+        let client = Arc::new(
+            hyper::Client::builder()
+                .keep_alive(true)
+                .keep_alive_timeout(Some(keep_alive_timeout))
+                .build(connector),
+        );
 
-                let executor = Executor::<D, C> {
-                    state: ExecutorState::Running(rx),
-                    handle,
-                    transaction_counter: weak_counter_clone,
-                    client,
-                    transaction_timeout,
-                };
+        let executor = Executor::<D, C> {
+            receiver: rx,
+            transaction_counter: weak_counter_clone,
+            client,
+            transaction_timeout,
+        };
 
-                if let Err(err) = runtime.block_on(executor) {
-                    warn!("Error when running Executor: {:?}", err);
-                }
+        let join_handle = tokio::spawn(executor.run());
 
-                info!("Executor exited.");
-            }).map(|join_handle| ExecutorHandle {
-                transaction_counter: weak_counter,
-                worker_counter: Counter::new(),
-                max_transactions: config.max_transactions_per_worker,
-                sender: tx,
-                join_handle,
-            }).map_err(SpawnError::ThreadSpawn)
+        Ok(ExecutorHandle {
+            transaction_counter: weak_counter,
+            worker_counter: Counter::new(),
+            max_transactions: config.max_transactions_per_worker,
+            sender: tx,
+            join_handle,
+        })
     }
-}
 
-impl<D: Deliverable, C: 'static + Connect> Future for Executor<D, C> {
-    type Item = ();
-    type Error = ();
+    async fn run(mut self) {
+        while let Some((transaction, counter)) = self.receiver.next().await {
+            trace!("Executor: spawning transaction.");
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        loop {
-            // If self.state is not set, then it will be finished
-            // so should only be not set if Finished
-            let state = mem::replace(&mut self.state, ExecutorState::Finished);
-            let mut state_changed = false;
-
-            self.state = match state {
-                ExecutorState::Running(mut receiver) => {
-                    loop {
-                        match receiver.poll() {
-                            Ok(Async::Ready(Some((transaction, counter)))) => {
-                                trace!("Executor: spawning transaction.");
-
-                                transaction.spawn_request(
-                                    &self.client,
-                                    &self.handle,
-                                    self.transaction_timeout.clone(),
-                                    counter,
-                                );
-                            }
-                            // No messages
-                            Ok(Async::NotReady) => break ExecutorState::Running(receiver),
-                            // All senders dropped or errored
-                            // (shouldn't be possible with () error type), shutdown
-                            Ok(Async::Ready(None)) | Err(()) => {
-                                state_changed = true;
-                                break ExecutorState::Draining;
-                            }
-                        }
-                    }
-                }
-                ExecutorState::Draining => {
-                    if self.transaction_counter.count() > 0 {
-                        ExecutorState::Draining
-                    } else {
-                        return Ok(Async::Ready(()));
-                    }
-                }
-                ExecutorState::Finished => panic!("Should not poll() after Executor is finished!"),
-            };
-
-            if !state_changed {
-                break;
-            }
+            transaction.spawn_request(
+                Arc::clone(&self.client),
+                self.transaction_timeout.clone(),
+                counter,
+            );
         }
 
-        Ok(Async::NotReady)
+        while self.transaction_counter.count() > 0 {
+            // ExecutorState::Draining
+            // do something, don't spin lock.
+        }
+
+        info!("Executor exited.");
     }
 }
