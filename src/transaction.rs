@@ -146,7 +146,14 @@ impl<D: Deliverable> Transaction<D> {
                     }
                 }
 
-                Err(_) => DeliveryResult::Timeout { duration },
+                Err(_) => {
+                    trace!(
+                        "Transaction timed out, duration: {:?}, timeout limit: {:?}",
+                        duration,
+                        timeout
+                    );
+                    DeliveryResult::Timeout { duration }
+                }
             };
 
             deliverable.complete(delivery_result);
@@ -192,6 +199,10 @@ mod tests {
             }
         }
 
+        fn timeout_count(&self) -> usize {
+            self.timeout_count.load(Ordering::Acquire)
+        }
+
         fn total_count(&self) -> usize {
             self.total_count.load(Ordering::Acquire)
         }
@@ -223,6 +234,7 @@ mod tests {
     }
 
     const TRANSACTION_SPAWN_COUNT: usize = 200;
+    const TIMEOUT_COUNT: usize = 50;
 
     fn make_requests<C>(client: Client<C>, counter: &DeliveryCounter)
     where
@@ -230,15 +242,19 @@ mod tests {
     {
         let client = Arc::new(client);
 
-        for _ in 0..TRANSACTION_SPAWN_COUNT {
+        for i in 0..TRANSACTION_SPAWN_COUNT {
+            let url = if i < TIMEOUT_COUNT {
+                "https://httpbin.org/delay/4"
+            } else {
+                "https://httpbin.org/delay/0"
+            };
+
             let transaction = Transaction::new(
                 counter.clone(),
-                Request::get("https://onesignal.com/")
-                    .body(Body::empty())
-                    .unwrap(),
+                Request::get(url).body(Body::empty()).unwrap(),
                 false,
             );
-            transaction.spawn_request(Arc::clone(&client), Duration::from_secs(10), Counter::new());
+            transaction.spawn_request(Arc::clone(&client), Duration::from_secs(2), Counter::new());
         }
 
         println!("spawn finished")
@@ -250,7 +266,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unfinished_transactions_get_sent_to_deliverable() {
+    async fn timed_out_transactions_get_sent_to_deliverable() {
         let _ = env_logger::try_init();
 
         info!("test start");
@@ -265,20 +281,7 @@ mod tests {
         dbg!(&counter);
 
         assert_ne!(counter.response_count(), TRANSACTION_SPAWN_COUNT);
-        assert_eq!(counter.total_count(), TRANSACTION_SPAWN_COUNT);
-    }
-
-    #[tokio::test]
-    async fn panicked_transactions_get_sent_to_deliverable() {
-        let _ = env_logger::try_init();
-
-        let counter = DeliveryCounter::new();
-
-        let client = test_hyper_client();
-        make_requests(client, &counter);
-        delay_for(Duration::from_secs(3)).await;
-
-        assert_ne!(counter.response_count(), TRANSACTION_SPAWN_COUNT);
+        assert_eq!(counter.timeout_count(), TIMEOUT_COUNT);
         assert_eq!(counter.total_count(), TRANSACTION_SPAWN_COUNT);
     }
 }
