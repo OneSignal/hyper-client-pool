@@ -18,7 +18,7 @@ fpool = "~0.3.1"
 raii-counter = "0.1"
 
 [dev-dependencies]
-env_logger = "0.5"
+env_logger = "0.7"
 lazy_static = "1.0"
 ipnet = "1.2"
 regex = "1.0"
