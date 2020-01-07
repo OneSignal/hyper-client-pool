@@ -1,5 +1,4 @@
 use std::fmt;
-use std::io::{self, ErrorKind};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -31,12 +30,6 @@ pub enum DeliveryResult {
 
     /// Failed to connect within the timeout limit.
     Timeout { duration: Duration },
-
-    /// The timeout handling had an error.
-    TimeoutError {
-        error: io::Error,
-        duration: Duration,
-    },
 
     /// Sending a request through hyper encountered an error.
     HyperError {
@@ -83,11 +76,11 @@ impl<D: Deliverable> Transaction<D> {
             request,
             requires_body,
         } = self;
-        trace!("Spawning request: {:?}", request);
 
         let start_time = Instant::now();
 
         let request_future = async move {
+            trace!("Sending request: {:?}", request);
             match client.request(request).await {
                 Ok(response) => {
                     if requires_body {
@@ -153,17 +146,7 @@ impl<D: Deliverable> Transaction<D> {
                     }
                 }
 
-                Err(timer_err) => {
-                    trace!(
-                        "Timer around Transaction errored, error: {:?}, duration: {:?}",
-                        timer_err,
-                        duration
-                    );
-                    DeliveryResult::TimeoutError {
-                        error: io::Error::new(ErrorKind::Other, timer_err),
-                        duration,
-                    }
-                }
+                Err(_) => DeliveryResult::Timeout { duration },
             };
 
             deliverable.complete(delivery_result);
@@ -193,6 +176,9 @@ mod tests {
     struct DeliveryCounter {
         total_count: Arc<AtomicUsize>,
         response_count: Arc<AtomicUsize>,
+        dropped_count: Arc<AtomicUsize>,
+        hyper_error_count: Arc<AtomicUsize>,
+        timeout_count: Arc<AtomicUsize>,
     }
 
     impl DeliveryCounter {
@@ -200,6 +186,9 @@ mod tests {
             DeliveryCounter {
                 total_count: Arc::new(AtomicUsize::new(0)),
                 response_count: Arc::new(AtomicUsize::new(0)),
+                dropped_count: Arc::new(AtomicUsize::new(0)),
+                hyper_error_count: Arc::new(AtomicUsize::new(0)),
+                timeout_count: Arc::new(AtomicUsize::new(0)),
             }
         }
 
@@ -214,16 +203,28 @@ mod tests {
 
     impl Deliverable for DeliveryCounter {
         fn complete(self, result: DeliveryResult) {
-            if let DeliveryResult::Response { .. } = result {
-                self.response_count.fetch_add(1, Ordering::AcqRel);
+            match result {
+                DeliveryResult::Response { .. } => {
+                    self.response_count.fetch_add(1, Ordering::AcqRel);
+                }
+                DeliveryResult::Dropped { .. } => {
+                    self.dropped_count.fetch_add(1, Ordering::AcqRel);
+                }
+                DeliveryResult::HyperError { .. } => {
+                    self.hyper_error_count.fetch_add(1, Ordering::AcqRel);
+                }
+                DeliveryResult::Timeout { .. } => {
+                    self.timeout_count.fetch_add(1, Ordering::AcqRel);
+                }
             }
+
             self.total_count.fetch_add(1, Ordering::AcqRel);
         }
     }
 
     const TRANSACTION_SPAWN_COUNT: usize = 200;
 
-    async fn make_requests<C>(client: Client<C>, counter: &DeliveryCounter)
+    fn make_requests<C>(client: Client<C>, counter: &DeliveryCounter)
     where
         C: 'static + Connect + Clone + Send + Sync,
     {
@@ -239,6 +240,8 @@ mod tests {
             );
             transaction.spawn_request(Arc::clone(&client), Duration::from_secs(10), Counter::new());
         }
+
+        println!("spawn finished")
     }
 
     fn test_hyper_client() -> hyper::Client<HttpsConnector<HttpConnector>> {
@@ -250,12 +253,16 @@ mod tests {
     async fn unfinished_transactions_get_sent_to_deliverable() {
         let _ = env_logger::try_init();
 
+        info!("test start");
+
         let counter = DeliveryCounter::new();
 
         let client = test_hyper_client();
 
-        make_requests(client, &counter).await;
+        make_requests(client, &counter);
         delay_for(Duration::from_secs(3)).await;
+
+        dbg!(&counter);
 
         assert_ne!(counter.response_count(), TRANSACTION_SPAWN_COUNT);
         assert_eq!(counter.total_count(), TRANSACTION_SPAWN_COUNT);
@@ -268,7 +275,7 @@ mod tests {
         let counter = DeliveryCounter::new();
 
         let client = test_hyper_client();
-        make_requests(client, &counter).await;
+        make_requests(client, &counter);
         delay_for(Duration::from_secs(3)).await;
 
         assert_ne!(counter.response_count(), TRANSACTION_SPAWN_COUNT);
