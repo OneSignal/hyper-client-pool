@@ -77,9 +77,9 @@ impl<D: Deliverable> ExecutorHandle<D> {
 }
 
 impl<D: Deliverable, C: 'static + Connect + Clone + Send + Sync> Executor<D, C> {
-    pub fn spawn<A>(config: &Config) -> Result<ExecutorHandle<D>, SpawnError>
+    pub fn spawn<A, R>(config: &Config, resolver: R) -> Result<ExecutorHandle<D>, SpawnError>
     where
-        A: ConnectorAdaptor<Connect = C>,
+        A: ConnectorAdaptor<R, Connect = C>,
     {
         let (tx, rx) = FuturesMpsc::unbounded();
         let weak_counter = WeakCounter::new();
@@ -89,7 +89,7 @@ impl<D: Deliverable, C: 'static + Connect + Clone + Send + Sync> Executor<D, C> 
 
         let tls = tokio_tls::TlsConnector::from(native_tls::TlsConnector::new()?);
 
-        let mut http = HttpConnector::new();
+        let mut http = HttpConnector::new_with_resolver(resolver);
         http.enforce_http(false);
         // Set TCP_NODELAY to true to turn off Nagle's algorithm, an algorithm that
         // buffers sending / receiving data in packets which may be slowing down
