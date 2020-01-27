@@ -137,8 +137,10 @@ impl<D: Deliverable, C: 'static + Connect + Clone + Send + Sync> Executor<D, C> 
         }
 
         while self.transaction_counter.count() > 0 {
-            // ExecutorState::Draining
-            // do something, don't spin lock.
+            // This is an arbitraty timeout, if shutdown needs to be optimized,
+            // this can be decreased. Previously, this relied on an implicit
+            // wakeup happening
+            tokio::time::delay_for(Duration::from_millis(250)).await;
         }
 
         info!("Executor exited.");
