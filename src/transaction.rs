@@ -278,8 +278,6 @@ mod tests {
         make_requests(client, &counter);
         delay_for(Duration::from_secs(3)).await;
 
-        dbg!(&counter);
-
         assert_ne!(counter.response_count(), TRANSACTION_SPAWN_COUNT);
         assert_eq!(counter.timeout_count(), TIMEOUT_COUNT);
         assert_eq!(counter.total_count(), TRANSACTION_SPAWN_COUNT);
