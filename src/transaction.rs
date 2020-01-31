@@ -283,8 +283,6 @@ mod tests {
             );
             transaction.spawn_request(Arc::clone(&client), Duration::from_secs(2), Counter::new());
         }
-
-        println!("spawn finished")
     }
 
     fn test_hyper_client() -> hyper::Client<HttpsConnector<HttpConnector>> {
