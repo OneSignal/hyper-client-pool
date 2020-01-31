@@ -6,12 +6,12 @@ extern crate hyper_client_pool;
 extern crate ipnet;
 extern crate regex;
 
+use futures::{channel::mpsc, prelude::*};
 use std::net::IpAddr;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::{mpsc, Arc};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use hyper::{Body, Request};
@@ -27,18 +27,18 @@ lazy_static! {
 }
 
 #[derive(Debug)]
-struct MspcDeliverable(mpsc::Sender<DeliveryResult>);
+struct MspcDeliverable(mpsc::UnboundedSender<DeliveryResult>);
 
 impl Deliverable for MspcDeliverable {
     fn complete(self, result: DeliveryResult) {
-        let _ = self.0.send(result);
+        let _ = self.0.unbounded_send(result);
     }
 }
 
 fn default_config() -> Config {
     Config {
         keep_alive_timeout: Duration::from_secs(3),
-        transaction_timeout: Duration::from_secs(20),
+        transaction_timeout: Duration::from_secs(2),
         dns_threads_per_worker: 1,
         max_transactions_per_worker: 1_000,
         workers: 2,
@@ -78,8 +78,8 @@ fn assert_successful_result(result: DeliveryResult) {
     assert_eq!(true, successful, "Not successful result: {:?}!", result);
 }
 
-#[test]
-fn some_gets_single_worker() {
+#[tokio::test]
+async fn some_gets_single_worker() {
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
     let _ = env_logger::try_init();
@@ -88,7 +88,7 @@ fn some_gets_single_worker() {
     config.workers = 1;
 
     let mut pool = Pool::builder(config).build().unwrap();
-    let (tx, rx) = mpsc::channel();
+    let (tx, mut rx) = mpsc::unbounded();
 
     for _ in 0..5 {
         pool.request(onesignal_transaction(MspcDeliverable(tx.clone())))
@@ -96,14 +96,14 @@ fn some_gets_single_worker() {
     }
 
     for _ in 0..5 {
-        assert_successful_result(rx.recv().unwrap());
+        assert_successful_result(rx.next().await.unwrap());
     }
 
-    pool.shutdown();
+    pool.shutdown().await;
 }
 
-#[test]
-fn ton_of_gets() {
+#[tokio::test]
+async fn ton_of_gets() {
     const REQUEST_AMOUNT: usize = 600;
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
@@ -116,17 +116,17 @@ fn ton_of_gets() {
     config.transaction_timeout = Duration::from_secs(60);
 
     let mut pool = Pool::builder(config).build().unwrap();
-    let (tx, rx) = mpsc::channel();
+    let (tx, mut rx) = mpsc::unbounded();
 
     for _ in 0..REQUEST_AMOUNT {
         pool.request(httpbin_transaction(MspcDeliverable(tx.clone())))
             .expect("request ok");
     }
 
-    let mut successes = 0;
-    let mut not_successes = 0;
+    let mut successes = 0i32;
+    let mut not_successes = 0i32;
     for _ in 0..REQUEST_AMOUNT {
-        let (successful, _result) = check_successful_result(rx.recv().unwrap());
+        let (successful, _result) = check_successful_result(rx.next().await.unwrap());
         if successful {
             successes += 1;
         } else {
@@ -134,10 +134,23 @@ fn ton_of_gets() {
         }
     }
 
-    assert!(successes > ((REQUEST_AMOUNT as f32) * 0.9) as _);
-    assert!(not_successes < ((REQUEST_AMOUNT as f32) * 0.1) as _);
+    let expected_successes = ((REQUEST_AMOUNT as f32) * 0.9) as _;
+    assert!(
+        successes > expected_successes,
+        "expected at least {} successes, found {}",
+        expected_successes,
+        successes,
+    );
 
-    pool.shutdown();
+    let expected_failures = ((REQUEST_AMOUNT as f32) * 0.1) as _;
+    assert!(
+        not_successes < expected_failures,
+        "expected at most {} failures, found {}",
+        expected_failures,
+        not_successes
+    );
+
+    pool.shutdown().await;
     println!(
         "Successes: {} | Not Successes: {}",
         successes, not_successes
@@ -168,8 +181,8 @@ impl Deliverable for SuccessfulCompletionCounter {
     }
 }
 
-#[test]
-fn graceful_shutdown() {
+#[tokio::test]
+async fn graceful_shutdown() {
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
     let _ = env_logger::try_init();
@@ -186,12 +199,12 @@ fn graceful_shutdown() {
             .expect("request ok");
     }
 
-    pool.shutdown();
+    pool.shutdown().await;
     assert_eq!(counter.count(), txn);
 }
 
-#[test]
-fn full_error() {
+#[tokio::test]
+async fn full_error() {
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
     let _ = env_logger::try_init();
@@ -201,7 +214,7 @@ fn full_error() {
     config.max_transactions_per_worker = 1;
 
     let mut pool = Pool::builder(config).build().unwrap();
-    let (tx, rx) = mpsc::channel();
+    let (tx, mut rx) = mpsc::unbounded();
 
     // Start requests
     for _ in 0..3 {
@@ -215,10 +228,10 @@ fn full_error() {
     }
 
     for _ in 0..3 {
-        assert_successful_result(rx.recv().unwrap());
+        assert_successful_result(rx.next().await.unwrap());
     }
 
-    pool.shutdown();
+    pool.shutdown().await;
 }
 
 static CLOUDFLARE_NETS: &[&str] = &[
@@ -301,13 +314,17 @@ macro_rules! assert_onesignal_connection_open_count_eq {
     };
 }
 
-#[test]
-fn keep_alive_works_as_expected() {
+#[tokio::test]
+async fn keep_alive_works_as_expected() {
     let _write = TEST_LOCK.write().unwrap_or_else(|e| e.into_inner());
 
     // block until no connections are open - this is unfortunate..
     // but at least we have tests covering the keep-alive :)
-    while onesignal_connection_count().0 > 0 {}
+    let count = onesignal_connection_count().0;
+    while count > 0 {
+        eprintln!("keep_alive_works_as_expected blocking - open connections to cloudflare: {} must be 0 before test can run", count);
+        tokio::time::delay_for(Duration::from_secs(1)).await;
+    }
 
     let _ = env_logger::try_init();
 
@@ -315,14 +332,14 @@ fn keep_alive_works_as_expected() {
     config.keep_alive_timeout = Duration::from_secs(3);
 
     let mut pool = Pool::builder(config).build().unwrap();
-    let (tx, rx) = mpsc::channel();
+    let (tx, mut rx) = mpsc::unbounded();
 
     // Start first request
     pool.request(onesignal_transaction(MspcDeliverable(tx.clone())))
         .expect("request ok");
 
     // wait for request to finish
-    assert_successful_result(rx.recv().unwrap());
+    assert_successful_result(rx.next().await.unwrap());
     let start = Instant::now();
     loop {
         let seconds_elapsed = start.elapsed().as_secs();
@@ -333,19 +350,23 @@ fn keep_alive_works_as_expected() {
             assert_onesignal_connection_open_count_eq!(0);
             break;
         }
-        thread::sleep(Duration::from_millis(100));
+        tokio::time::delay_for(Duration::from_millis(100)).await;
     }
 
-    pool.shutdown();
+    pool.shutdown().await;
 }
 
-#[test]
-fn connection_reuse_works_as_expected() {
+#[tokio::test]
+async fn connection_reuse_works_as_expected() {
     let _write = TEST_LOCK.write().unwrap_or_else(|e| e.into_inner());
 
     // block until no connections are open - this is unfortunate..
     // but at least we have tests covering the keep-alive :)
-    while onesignal_connection_count().0 > 0 {}
+    let count = onesignal_connection_count().0;
+    while count > 0 {
+        eprintln!("connection_reuse_works_as_expected blocking - open connections to cloudflare: {} must be 0 before test can run", count);
+        tokio::time::delay_for(Duration::from_secs(1)).await;
+    }
 
     let _ = env_logger::try_init();
 
@@ -356,32 +377,32 @@ fn connection_reuse_works_as_expected() {
     config.keep_alive_timeout = Duration::from_secs(10);
 
     let mut pool = Pool::builder(config).build().unwrap();
-    let (tx, rx) = mpsc::channel();
+    let (tx, mut rx) = mpsc::unbounded();
 
     // Start first request
     pool.request(onesignal_transaction(MspcDeliverable(tx.clone())))
         .expect("request ok");
     // wait for request to finish
-    assert_successful_result(rx.recv().unwrap());
+    assert_successful_result(rx.next().await.unwrap());
 
     assert_onesignal_connection_open_count_eq!(1);
-    thread::sleep(Duration::from_secs(3));
+    tokio::time::delay_for(Duration::from_secs(3)).await;
     assert_onesignal_connection_open_count_eq!(1);
 
     // Start second request
     pool.request(onesignal_transaction(MspcDeliverable(tx.clone())))
         .expect("request ok");
     // wait for request to finish
-    assert_successful_result(rx.recv().unwrap());
+    assert_successful_result(rx.next().await.unwrap());
 
     // there should only be one connection open
     assert_onesignal_connection_open_count_eq!(1);
 
-    pool.shutdown();
+    pool.shutdown().await;
 }
 
-#[test]
-fn timeout_works_as_expected() {
+#[tokio::test]
+async fn timeout_works_as_expected() {
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
     let _ = env_logger::try_init();
@@ -390,7 +411,7 @@ fn timeout_works_as_expected() {
     config.transaction_timeout = Duration::from_secs(2);
 
     let mut pool = Pool::builder(config).build().unwrap();
-    let (tx, rx) = mpsc::channel();
+    let (tx, mut rx) = mpsc::unbounded();
 
     // Start first request
     pool.request(
@@ -402,18 +423,19 @@ fn timeout_works_as_expected() {
                 .unwrap(),
             false,
         ),
-    ).expect("request ok");
+    )
+    .expect("request ok");
 
-    match rx.recv().unwrap() {
+    match rx.next().await.unwrap() {
         DeliveryResult::Timeout { .. } => (), // ok
         res => panic!("Expected timeout!, got: {:?}", res),
     }
 
-    pool.shutdown();
+    pool.shutdown().await;
 }
 
-#[test]
-fn transaction_counting_works() {
+#[tokio::test]
+async fn transaction_counting_works() {
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
     let _ = env_logger::try_init();
@@ -427,7 +449,7 @@ fn transaction_counting_works() {
         .transaction_counters(transaction_counters.clone())
         .build()
         .unwrap();
-    let (tx, rx) = mpsc::channel();
+    let (tx, mut rx) = mpsc::unbounded();
 
     // Start requests
     for _ in 0..3 {
@@ -436,7 +458,7 @@ fn transaction_counting_works() {
     }
 
     let mut saw_transactions = false;
-    let mut received = 0;
+    let mut received = 0i32;
     loop {
         let counters = transaction_counters.try_read().unwrap();
         for counter in counters.iter() {
@@ -448,7 +470,7 @@ fn transaction_counting_works() {
             assert!(transaction_count <= 1);
         }
 
-        if let Ok(recv) = rx.try_recv() {
+        if let Ok(Some(recv)) = rx.try_next() {
             assert_successful_result(recv);
             received += 1;
 
@@ -456,12 +478,14 @@ fn transaction_counting_works() {
                 break;
             }
         }
+
+        tokio::time::delay_for(Duration::from_millis(250)).await;
     }
 
     // Make sure that we saw the counter was doing something
     assert!(saw_transactions);
 
-    pool.shutdown();
+    pool.shutdown().await;
 
     // Counters should not be valid anymore
     let counters = transaction_counters.try_read().unwrap();

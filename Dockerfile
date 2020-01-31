@@ -1,4 +1,4 @@
-FROM osig/rust-ubuntu:1.26
+FROM osig/rust-ubuntu:1.40
 
 RUN apt-get update && apt-get install -y git ssh lsof
 

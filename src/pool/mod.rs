@@ -2,19 +2,24 @@
 //!
 //! This module provides a simple API wrapping a pool of HTTP clients
 use std::cmp;
+use std::net::IpAddr;
 
 use fpool::RoundRobinPool;
+use hyper::client::connect::dns::Name;
+use tower_service::Service;
 
-use config::Config;
-use deliverable::Deliverable;
-use error::{Error, ErrorKind, RequestError, SpawnError};
-use executor::{Executor, ExecutorHandle};
-use transaction::Transaction;
-use util::RwLockExt;
+use crate::config::Config;
+use crate::deliverable::Deliverable;
+use crate::error::{Error, ErrorKind, RequestError, SpawnError};
+use crate::executor::{Executor, ExecutorHandle};
+use crate::transaction::Transaction;
+use crate::util::RwLockExt;
 
 mod builder;
 
-pub use self::builder::{ConnectorAdaptor, DefaultConnectorAdapator, PoolBuilder, PoolConnector};
+pub use self::builder::{
+    ConnectorAdaptor, CreateResolver, DefaultConnectorAdapator, PoolBuilder, PoolConnector,
+};
 
 /// A pool of [`hyper::Client`]s.
 ///
@@ -32,10 +37,15 @@ impl<D: Deliverable> Pool<D> {
         PoolBuilder::new(config)
     }
 
-    pub(in pool) fn new<A>(builder: PoolBuilder<D>) -> Result<Pool<D>, SpawnError>
+    pub(in crate::pool) fn new<A, CR>(builder: PoolBuilder<D>) -> Result<Pool<D>, SpawnError>
     where
-        A: ConnectorAdaptor,
-        A::Connect: 'static,
+        A: ConnectorAdaptor<CR::Resolver>,
+        A::Connect: 'static + Clone + Send + Sync,
+        CR: CreateResolver,
+        CR::Resolver: 'static + Clone + Send + Sync + Service<Name>,
+        CR::Error: 'static + Send + Sync + std::error::Error,
+        CR::Future: Send + std::future::Future<Output = Result<CR::Response, CR::Error>>,
+        CR::Response: Iterator<Item = IpAddr>,
     {
         let PoolBuilder {
             mut config,
@@ -48,7 +58,9 @@ impl<D: Deliverable> Pool<D> {
         config.workers = num_workers;
 
         let executor_handles = RoundRobinPool::builder(config.workers, move || {
-            let executor = Executor::spawn::<A>(&config);
+            let resolver = CR::create_resolver();
+
+            let executor = Executor::spawn::<A, CR::Resolver>(&config, resolver);
 
             // Push a transaction counter to the synchronized transaction_counters
             // if executor creation was successful
@@ -61,7 +73,8 @@ impl<D: Deliverable> Pool<D> {
             }
 
             executor
-        }).build()?;
+        })
+        .build()?;
 
         Ok(Pool { executor_handles })
     }
@@ -102,15 +115,13 @@ impl<D: Deliverable> Pool<D> {
     /// Shutdown the pool
     ///
     /// Waits for all workers to be empty before stopping.
-    pub fn shutdown(self) {
+    pub async fn shutdown(self) {
         let handles = self.executor_handles.into_items();
         let join_handles: Vec<_> = handles
             .into_iter()
             .map(|handle| handle.shutdown())
             .collect();
 
-        for join_handle in join_handles.into_iter() {
-            let _ = join_handle.join();
-        }
+        futures::future::join_all(join_handles).await;
     }
 }

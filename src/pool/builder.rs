@@ -1,37 +1,74 @@
-use deliverable::Deliverable;
-use hyper::client::connect::Connect;
-use hyper_http_connector::HttpConnector;
+use crate::deliverable::Deliverable;
+use hyper::client::{
+    connect::{
+        dns::{GaiResolver, Name},
+        Connect,
+    },
+    HttpConnector,
+};
 use hyper_tls::HttpsConnector;
 use std::marker::PhantomData;
+use std::net::IpAddr;
 use std::sync::{Arc, RwLock};
+use tower_service::Service;
 
 use super::Pool;
-use config::Config;
-use error::SpawnError;
-use executor::TransactionCounter;
+use crate::config::Config;
+use crate::error::SpawnError;
+use crate::executor::TransactionCounter;
 
-pub type PoolConnector = HttpsConnector<HttpConnector>;
+pub type PoolConnector<R> = HttpsConnector<HttpConnector<R>>;
 
 /// A trait used to wrap the PoolConnector used by default into a
 /// different type that implements Connect
-pub trait ConnectorAdaptor {
+pub trait ConnectorAdaptor<R> {
     type Connect: Connect;
 
-    fn wrap(connector: PoolConnector) -> Self::Connect;
+    fn wrap(connector: PoolConnector<R>) -> Self::Connect;
+}
+
+/// A trait used to create a DNS resolver. DefaultResolver uses the default DNS
+/// resolver built into hyper.
+pub trait CreateResolver {
+    type Resolver: 'static
+        + Clone
+        + Send
+        + Sync
+        + Service<Name, Error = Self::Error, Future = Self::Future, Response = Self::Response>;
+
+    type Error: 'static + Send + Sync + std::error::Error;
+    type Future: Send + std::future::Future<Output = Result<Self::Response, Self::Error>>;
+    type Response: Iterator<Item = IpAddr>;
+
+    fn create_resolver() -> Self::Resolver;
+}
+
+struct DefaultResolver;
+
+impl CreateResolver for DefaultResolver {
+    type Resolver = GaiResolver;
+
+    type Error = <Self::Resolver as Service<Name>>::Error;
+    type Future = <Self::Resolver as Service<Name>>::Future;
+    type Response = <Self::Resolver as Service<Name>>::Response;
+
+    fn create_resolver() -> Self::Resolver {
+        GaiResolver::new()
+    }
 }
 
 /// Default type that implemented ConnectorAdaptor, just passes through the connector
 pub struct DefaultConnectorAdapator;
 
 pub struct PoolBuilder<D: Deliverable> {
-    pub(in pool) config: Config,
-    pub(in pool) transaction_counters: Option<Arc<RwLock<Vec<TransactionCounter>>>>,
+    pub(in crate::pool) config: Config,
+    pub(in crate::pool) transaction_counters: Option<Arc<RwLock<Vec<TransactionCounter>>>>,
 
     _d: PhantomData<D>,
 }
 
 impl<D: Deliverable> PoolBuilder<D> {
-    pub(in pool) fn new(config: Config) -> PoolBuilder<D> {
+    pub(in crate::pool) fn new(config: Config) -> PoolBuilder<D> {
         PoolBuilder {
             config,
             transaction_counters: None,
@@ -41,17 +78,32 @@ impl<D: Deliverable> PoolBuilder<D> {
     }
 
     pub fn build(self) -> Result<Pool<D>, SpawnError> {
-        Pool::new::<DefaultConnectorAdapator>(self)
+        self.build_with_adaptor::<DefaultConnectorAdapator>()
     }
 
     /// Create the pool with a ConnectorAdaptor, a type that is used to
     /// wrap the hyper::Client's connector
-    pub fn build_with_adaptor<C>(self) -> Result<Pool<D>, SpawnError>
+    pub fn build_with_adaptor<A>(self) -> Result<Pool<D>, SpawnError>
     where
-        C: ConnectorAdaptor,
-        C::Connect: 'static,
+        A: ConnectorAdaptor<GaiResolver>,
+        A::Connect: 'static + Clone + Send + Sync,
     {
-        Pool::new::<C>(self)
+        self.build_with_adaptor_and_resolver::<A, DefaultResolver>()
+    }
+
+    /// Create the pool with a ConnectorAdaptor, a type that is used to
+    /// wrap the hyper::Client's connector
+    pub fn build_with_adaptor_and_resolver<A, CR>(self) -> Result<Pool<D>, SpawnError>
+    where
+        A: ConnectorAdaptor<CR::Resolver>,
+        A::Connect: 'static + Clone + Send + Sync,
+        CR: CreateResolver,
+        CR::Resolver: 'static + Clone + Send + Sync + Service<Name>,
+        CR::Error: 'static + Send + Sync + std::error::Error,
+        CR::Future: Send + std::future::Future<Output = Result<CR::Response, CR::Error>>,
+        CR::Response: Iterator<Item = IpAddr>,
+    {
+        Pool::new::<A, CR>(self)
     }
 
     /// Pass in an synchronized Vec<Weak<WeakCounter>> that will be populated
@@ -65,10 +117,16 @@ impl<D: Deliverable> PoolBuilder<D> {
     }
 }
 
-impl ConnectorAdaptor for DefaultConnectorAdapator {
-    type Connect = PoolConnector;
+impl<R> ConnectorAdaptor<R> for DefaultConnectorAdapator
+where
+    R: 'static + Clone + Send + Sync + Service<Name>,
+    R::Error: 'static + Send + Sync + std::error::Error,
+    R::Future: Send + std::future::Future<Output = Result<R::Response, R::Error>>,
+    R::Response: Iterator<Item = IpAddr>,
+{
+    type Connect = PoolConnector<R>;
 
-    fn wrap(connector: PoolConnector) -> Self::Connect {
+    fn wrap(connector: PoolConnector<R>) -> Self::Connect {
         connector
     }
 }
