@@ -144,7 +144,7 @@ impl<D: Deliverable> Transaction<D> {
             }
         };
 
-        let request_future = async move {
+        tokio::spawn(async move {
             let result = tokio::time::timeout(timeout, request_future).await;
             let duration = start_time.elapsed();
 
@@ -188,9 +188,7 @@ impl<D: Deliverable> Transaction<D> {
             deliverable_guard.take().complete(delivery_result);
 
             drop(counter);
-        };
-
-        tokio::spawn(request_future);
+        });
     }
 }
 

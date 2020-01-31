@@ -136,11 +136,11 @@ impl<D: Deliverable, C: 'static + Connect + Clone + Send + Sync> Executor<D, C> 
             );
         }
 
+        // We should only reach this point if the sender is closed and we stop
+        // receiving transactions. This indicates a shutdown or error, which in
+        // either case should cause a shutdown.
         while self.transaction_counter.count() > 0 {
-            // This is an arbitraty timeout, if shutdown needs to be optimized,
-            // this can be decreased. Previously, this relied on an implicit
-            // wakeup happening
-            tokio::time::delay_for(Duration::from_millis(250)).await;
+            tokio::time::delay_for(self.transaction_timeout).await;
         }
 
         info!("Executor exited.");

@@ -38,7 +38,7 @@ impl Deliverable for MspcDeliverable {
 fn default_config() -> Config {
     Config {
         keep_alive_timeout: Duration::from_secs(3),
-        transaction_timeout: Duration::from_secs(20),
+        transaction_timeout: Duration::from_secs(2),
         dns_threads_per_worker: 1,
         max_transactions_per_worker: 1_000,
         workers: 2,
