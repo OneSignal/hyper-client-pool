@@ -46,6 +46,33 @@ pub struct Transaction<D: Deliverable> {
     requires_body: bool,
 }
 
+struct DeliverableDropGuard<D: Deliverable> {
+    deliverable: Option<D>,
+}
+
+impl<D: Deliverable> Drop for DeliverableDropGuard<D> {
+    fn drop(&mut self) {
+        self.deliverable.take().map(|deliverable| {
+            trace!("Dropping transaction..");
+            deliverable.complete(DeliveryResult::Dropped);
+        });
+    }
+}
+
+impl<D: Deliverable> DeliverableDropGuard<D> {
+    fn new(deliverable: D) -> Self {
+        Self {
+            deliverable: Some(deliverable),
+        }
+    }
+
+    fn take(mut self) -> D {
+        self.deliverable
+            .take()
+            .expect("take cannot be called more than once")
+    }
+}
+
 impl<D: Deliverable> fmt::Debug for Transaction<D> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -76,6 +103,8 @@ impl<D: Deliverable> Transaction<D> {
             request,
             requires_body,
         } = self;
+
+        let deliverable_guard = DeliverableDropGuard::new(deliverable);
 
         let start_time = Instant::now();
 
@@ -156,7 +185,7 @@ impl<D: Deliverable> Transaction<D> {
                 }
             };
 
-            deliverable.complete(delivery_result);
+            deliverable_guard.take().complete(delivery_result);
 
             drop(counter);
         };
