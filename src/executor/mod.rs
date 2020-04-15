@@ -140,7 +140,7 @@ impl<D: Deliverable, C: 'static + Connect + Clone + Send + Sync> Executor<D, C> 
         // receiving transactions. This indicates a shutdown or error, which in
         // either case should cause a shutdown.
         while self.transaction_counter.count() > 0 {
-            tokio::time::delay_for(self.transaction_timeout).await;
+            tokio::time::delay_for(Duration::from_millis(100)).await;
         }
 
         info!("Executor exited.");

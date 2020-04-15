@@ -1,6 +1,6 @@
 [package]
 name = "hyper-client-pool"
-version = "0.3.1"
+version = "0.3.2"
 authors = ["Joe Wilm <joe@jwilm.com>"]
 description = "Pooled Hyper Async Clients"
 license = "MIT OR Apache-2.0"
