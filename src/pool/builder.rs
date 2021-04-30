@@ -7,9 +7,8 @@ use hyper::client::{
     HttpConnector,
 };
 use hyper_tls::HttpsConnector;
-use std::marker::PhantomData;
-use std::net::IpAddr;
 use std::sync::{Arc, RwLock};
+use std::{marker::PhantomData, net::SocketAddr};
 use tower_service::Service;
 
 use super::Pool;
@@ -38,7 +37,7 @@ pub trait CreateResolver {
 
     type Error: 'static + Send + Sync + std::error::Error;
     type Future: Send + std::future::Future<Output = Result<Self::Response, Self::Error>>;
-    type Response: Iterator<Item = IpAddr>;
+    type Response: Iterator<Item = SocketAddr>;
 
     fn create_resolver() -> Self::Resolver;
 }
@@ -101,7 +100,7 @@ impl<D: Deliverable> PoolBuilder<D> {
         CR::Resolver: 'static + Clone + Send + Sync + Service<Name>,
         CR::Error: 'static + Send + Sync + std::error::Error,
         CR::Future: Send + std::future::Future<Output = Result<CR::Response, CR::Error>>,
-        CR::Response: Iterator<Item = IpAddr>,
+        CR::Response: Iterator<Item = SocketAddr>,
     {
         Pool::new::<A, CR>(self)
     }
@@ -122,7 +121,7 @@ where
     R: 'static + Clone + Send + Sync + Service<Name>,
     R::Error: 'static + Send + Sync + std::error::Error,
     R::Future: Send + std::future::Future<Output = Result<R::Response, R::Error>>,
-    R::Response: Iterator<Item = IpAddr>,
+    R::Response: Iterator<Item = SocketAddr>,
 {
     type Connect = PoolConnector<R>;
 

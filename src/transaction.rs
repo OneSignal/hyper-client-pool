@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use futures::prelude::*;
 use hyper::client::connect::Connect;
-use hyper::{self, Client, Request};
+use hyper::{self, client::Client, Request};
 use hyper::{Body, Response};
 
 use crate::deliverable::Deliverable;
@@ -202,7 +202,7 @@ mod tests {
     use hyper_tls::HttpsConnector;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use tokio::time::delay_for;
+    use tokio::time::sleep;
 
     use super::*;
 
@@ -285,9 +285,9 @@ mod tests {
         }
     }
 
-    fn test_hyper_client() -> hyper::Client<HttpsConnector<HttpConnector>> {
+    fn test_hyper_client() -> Client<HttpsConnector<HttpConnector>> {
         let connector = HttpsConnector::new();
-        hyper::Client::builder().build(connector)
+        Client::builder().build(connector)
     }
 
     #[tokio::test]
@@ -301,7 +301,7 @@ mod tests {
         let client = test_hyper_client();
 
         make_requests(client, &counter);
-        delay_for(Duration::from_secs(3)).await;
+        sleep(Duration::from_secs(3)).await;
 
         assert_ne!(counter.response_count(), TRANSACTION_SPAWN_COUNT);
         assert_eq!(counter.timeout_count(), TIMEOUT_COUNT);

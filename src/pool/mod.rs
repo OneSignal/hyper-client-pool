@@ -1,8 +1,7 @@
 //! HTTP Client Worker Pool
 //!
 //! This module provides a simple API wrapping a pool of HTTP clients
-use std::cmp;
-use std::net::IpAddr;
+use std::{cmp, net::SocketAddr};
 
 use fpool::RoundRobinPool;
 use hyper::client::connect::dns::Name;
@@ -45,7 +44,7 @@ impl<D: Deliverable> Pool<D> {
         CR::Resolver: 'static + Clone + Send + Sync + Service<Name>,
         CR::Error: 'static + Send + Sync + std::error::Error,
         CR::Future: Send + std::future::Future<Output = Result<CR::Response, CR::Error>>,
-        CR::Response: Iterator<Item = IpAddr>,
+        CR::Response: Iterator<Item = SocketAddr>,
     {
         let PoolBuilder {
             mut config,
