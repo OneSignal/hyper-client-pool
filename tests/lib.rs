@@ -268,7 +268,7 @@ lazy_static! {
             .collect::<Result<Vec<IpNet>, _>>()
             .unwrap()
     };
-    static ref LSOF_PARSE_IP_REGEX: Regex = { Regex::new(r"->\[?([^\]]*)\]?:https").unwrap() };
+    static ref LSOF_PARSE_IP_REGEX: Regex = Regex::new(r"->\[?([^\]]*)\]?:https").unwrap();
 }
 
 fn matches_cloudflare_ip(input: &str) -> bool {
