@@ -7,7 +7,7 @@ use std::time::Duration;
 use futures::channel::mpsc as FuturesMpsc;
 use futures::prelude::*;
 use hyper::client::connect::{Connect, HttpConnector};
-use hyper::{self, Client};
+use hyper::{self, client::Client};
 use hyper_tls::HttpsConnector;
 use tokio::task::JoinHandle;
 
@@ -87,7 +87,7 @@ impl<D: Deliverable, C: 'static + Connect + Clone + Send + Sync> Executor<D, C> 
         let keep_alive_timeout = config.keep_alive_timeout;
         let transaction_timeout = config.transaction_timeout.clone();
 
-        let tls = tokio_tls::TlsConnector::from(native_tls::TlsConnector::new()?);
+        let tls = tokio_native_tls::TlsConnector::from(native_tls::TlsConnector::new()?);
 
         let mut http = HttpConnector::new_with_resolver(resolver);
         http.enforce_http(false);
@@ -98,12 +98,12 @@ impl<D: Deliverable, C: 'static + Connect + Clone + Send + Sync> Executor<D, C> 
         // See a relevant article: https://www.extrahop.com/company/blog/2016/tcp-nodelay-nagle-quickack-best-practices/
         http.set_nodelay(true);
         http.set_keepalive(Some(keep_alive_timeout));
+
         let connector = A::wrap(HttpsConnector::from((http, tls)));
 
         let client = Arc::new(
-            hyper::Client::builder()
-                .keep_alive(true)
-                .keep_alive_timeout(Some(keep_alive_timeout))
+            Client::builder()
+                .pool_idle_timeout(Some(keep_alive_timeout))
                 .build(connector),
         );
 
@@ -140,7 +140,7 @@ impl<D: Deliverable, C: 'static + Connect + Clone + Send + Sync> Executor<D, C> 
         // receiving transactions. This indicates a shutdown or error, which in
         // either case should cause a shutdown.
         while self.transaction_counter.count() > 0 {
-            tokio::time::delay_for(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
         info!("Executor exited.");

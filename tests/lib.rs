@@ -268,7 +268,7 @@ lazy_static! {
             .collect::<Result<Vec<IpNet>, _>>()
             .unwrap()
     };
-    static ref LSOF_PARSE_IP_REGEX: Regex = { Regex::new(r"->\[?([^\]]*)\]?:https").unwrap() };
+    static ref LSOF_PARSE_IP_REGEX: Regex = Regex::new(r"->\[?([^\]]*)\]?:https").unwrap();
 }
 
 fn matches_cloudflare_ip(input: &str) -> bool {
@@ -323,7 +323,7 @@ async fn keep_alive_works_as_expected() {
     let count = onesignal_connection_count().0;
     while count > 0 {
         eprintln!("keep_alive_works_as_expected blocking - open connections to cloudflare: {} must be 0 before test can run", count);
-        tokio::time::delay_for(Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 
     let _ = env_logger::try_init();
@@ -350,7 +350,7 @@ async fn keep_alive_works_as_expected() {
             assert_onesignal_connection_open_count_eq!(0);
             break;
         }
-        tokio::time::delay_for(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
     pool.shutdown().await;
@@ -365,7 +365,7 @@ async fn connection_reuse_works_as_expected() {
     let count = onesignal_connection_count().0;
     while count > 0 {
         eprintln!("connection_reuse_works_as_expected blocking - open connections to cloudflare: {} must be 0 before test can run", count);
-        tokio::time::delay_for(Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 
     let _ = env_logger::try_init();
@@ -386,7 +386,7 @@ async fn connection_reuse_works_as_expected() {
     assert_successful_result(rx.next().await.unwrap());
 
     assert_onesignal_connection_open_count_eq!(1);
-    tokio::time::delay_for(Duration::from_secs(3)).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
     assert_onesignal_connection_open_count_eq!(1);
 
     // Start second request
@@ -479,7 +479,7 @@ async fn transaction_counting_works() {
             }
         }
 
-        tokio::time::delay_for(Duration::from_millis(250)).await;
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 
     // Make sure that we saw the counter was doing something
