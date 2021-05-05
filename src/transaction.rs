@@ -9,7 +9,7 @@ use hyper::{Body, Response};
 
 use crate::deliverable::Deliverable;
 use raii_counter::Counter;
-use tracing::{Instrument, debug_span, trace};
+use tracing::{debug_span, trace, Instrument};
 
 /// The result of the transaction, a message sent to the
 /// deliverable.
@@ -106,7 +106,7 @@ impl<D: Deliverable> Transaction<D> {
     /// being made.
     ///
     /// https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/trace/semantic_conventions/http.md
-    pub fn with_parent_span(mut self, span_id: impl Into<Option<tracing::Id>>)-> Self {
+    pub fn with_parent_span(mut self, span_id: impl Into<Option<tracing::Id>>) -> Self {
         self.span_id = span_id.into();
 
         self
@@ -187,55 +187,54 @@ impl<D: Deliverable> Transaction<D> {
             }
         };
 
-        tokio::spawn(async move {
-            let result = tokio::time::timeout(timeout, request_future).await;
-            let duration = start_time.elapsed();
+        tokio::spawn(
+            async move {
+                let result = tokio::time::timeout(timeout, request_future).await;
+                let duration = start_time.elapsed();
 
-            let delivery_result = match result {
-                Ok(Ok((response, body, body_size))) => {
-                    inner_span2.record("http.status_code", &response.status().as_u16());
-                    inner_span2.record("outcome", &"http success");
-                    trace!(
-                        ?response,
-                        ?duration,
-                        "Finished transaction",
-                    );
-                    DeliveryResult::Response {
-                        response,
-                        body,
-                        body_size,
-                        duration,
+                let delivery_result = match result {
+                    Ok(Ok((response, body, body_size))) => {
+                        inner_span2.record("http.status_code", &response.status().as_u16());
+                        inner_span2.record("outcome", &"http success");
+                        trace!(?response, ?duration, "Finished transaction",);
+                        DeliveryResult::Response {
+                            response,
+                            body,
+                            body_size,
+                            duration,
+                        }
                     }
-                }
 
-                Ok(Err(hyper_error)) => {
-                    inner_span2.record("outcome", &"http error");
-                    trace!(
-                        error = ?hyper_error,
-                        ?duration,
-                        "Transaction errored during delivery",
-                    );
-                    DeliveryResult::HyperError {
-                        error: hyper_error,
-                        duration,
+                    Ok(Err(hyper_error)) => {
+                        inner_span2.record("outcome", &"http error");
+                        trace!(
+                            error = ?hyper_error,
+                            ?duration,
+                            "Transaction errored during delivery",
+                        );
+                        DeliveryResult::HyperError {
+                            error: hyper_error,
+                            duration,
+                        }
                     }
-                }
 
-                Err(_) => {
-                    inner_span2.record("outcome", &"timeout");
-                    trace!(
-                        ?duration,
-                        timeout_limit = ?timeout,
-                        "Transaction timed out",
-                    );
-                    DeliveryResult::Timeout { duration }
-                }
-            };
+                    Err(_) => {
+                        inner_span2.record("outcome", &"timeout");
+                        trace!(
+                            ?duration,
+                            timeout_limit = ?timeout,
+                            "Transaction timed out",
+                        );
+                        DeliveryResult::Timeout { duration }
+                    }
+                };
 
-            deliverable_guard.take().complete(delivery_result);
+                deliverable_guard.take().complete(delivery_result);
 
-            drop(counter);
-        }.instrument(outer_span));
+                drop(counter);
+            }
+            .instrument(outer_span),
+        );
     }
 }
 

@@ -1,10 +1,10 @@
 #[macro_use]
 extern crate lazy_static;
 
-extern crate tracing_subscriber;
 extern crate hyper_client_pool;
 extern crate ipnet;
 extern crate regex;
+extern crate tracing_subscriber;
 
 use futures::{channel::mpsc, prelude::*};
 use std::net::IpAddr;
