@@ -10,6 +10,7 @@ use hyper::client::connect::{Connect, HttpConnector};
 use hyper::{self, client::Client};
 use hyper_tls::HttpsConnector;
 use tokio::task::JoinHandle;
+use tracing::{trace, info};
 
 use crate::config::Config;
 use crate::deliverable::Deliverable;

@@ -1,13 +1,12 @@
 [package]
 name = "hyper-client-pool"
-version = "0.4.0"
+version = "0.5.0"
 authors = ["Joe Wilm <joe@jwilm.com>"]
 description = "Pooled Hyper Async Clients"
 license = "MIT OR Apache-2.0"
 edition = "2018"
 
 [dependencies]
-log = "0.4"
 hyper = { version = "0.14", features = ["client", "http1", "stream", "runtime"] }
 native-tls = "0.2"
 hyper-tls = "0.5"
@@ -17,10 +16,12 @@ tokio = { version = "1.5", features = ["time"] }
 fpool = "0.5"
 raii-counter = "0.1"
 tower-service = "0.3.0"
+tracing = "0.1"
+tracing-futures = "0.2"
 
 [dev-dependencies]
-env_logger = "0.7"
 lazy_static = "1.0"
 ipnet = "1.2"
 regex = "1.0"
 tokio = { version = "1.5", features = ["macros"] }
+tracing-subscriber = { version = "0.2", features = ["env-filter"] }
