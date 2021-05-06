@@ -1,12 +1,11 @@
-#[macro_use]
-extern crate log;
-
 extern crate fpool;
 extern crate futures;
 extern crate hyper_tls;
 extern crate native_tls;
 extern crate raii_counter;
 extern crate tokio;
+extern crate tracing;
+extern crate tracing_futures;
 
 pub extern crate hyper;
 

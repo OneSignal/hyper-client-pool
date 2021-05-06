@@ -9,6 +9,7 @@ use hyper::{Body, Response};
 
 use crate::deliverable::Deliverable;
 use raii_counter::Counter;
+use tracing::{debug_span, trace, Instrument};
 
 /// The result of the transaction, a message sent to the
 /// deliverable.
@@ -44,25 +45,28 @@ pub struct Transaction<D: Deliverable> {
     deliverable: D,
     request: Request<Body>,
     requires_body: bool,
+    span_id: Option<tracing::Id>,
 }
 
 struct DeliverableDropGuard<D: Deliverable> {
     deliverable: Option<D>,
+    span_id: Option<tracing::Id>,
 }
 
 impl<D: Deliverable> Drop for DeliverableDropGuard<D> {
     fn drop(&mut self) {
         self.deliverable.take().map(|deliverable| {
-            trace!("Dropping transaction..");
+            trace!(parent: self.span_id.clone(), "Dropping transaction..");
             deliverable.complete(DeliveryResult::Dropped);
         });
     }
 }
 
 impl<D: Deliverable> DeliverableDropGuard<D> {
-    fn new(deliverable: D) -> Self {
+    fn new(deliverable: D, span_id: Option<tracing::Id>) -> Self {
         Self {
             deliverable: Some(deliverable),
+            span_id,
         }
     }
 
@@ -89,7 +93,23 @@ impl<D: Deliverable> Transaction<D> {
             deliverable,
             request,
             requires_body,
+            span_id: None,
         }
+    }
+
+    /// Report tracing events for this transaction within the `tracing::Span`
+    /// with the provided ID. Most interesting of these events is the
+    /// debug-level `http_request` span, which tries to have fields provided in
+    /// the opentelemetry HTTP conventions document. This event will be reported
+    /// wether this method is called or not, but it will be much more useful if
+    /// you provide a parent span so that you can determine why the request is
+    /// being made.
+    ///
+    /// https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/trace/semantic_conventions/http.md
+    pub fn with_parent_span(mut self, span_id: impl Into<Option<tracing::Id>>) -> Self {
+        self.span_id = span_id.into();
+
+        self
     }
 
     pub(crate) fn spawn_request<C: 'static + Connect + Clone + Send + Sync>(
@@ -102,14 +122,32 @@ impl<D: Deliverable> Transaction<D> {
             deliverable,
             request,
             requires_body,
+            span_id,
         } = self;
 
-        let deliverable_guard = DeliverableDropGuard::new(deliverable);
+        let outer_span = debug_span!(
+            parent: span_id,
+            "http_request",
+            otel.kind = "client",
+            http.url = %request.uri(),
+            http.host = request.uri().host().unwrap_or(""),
+            http.scheme = request.uri().scheme_str().unwrap_or(""),
+            http.method = request.method().as_str(),
+            http.flavor = ?request.version(),
+            http.status_code = tracing::field::Empty,
+            http.request_content_length = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+        );
+
+        let deliverable_guard = DeliverableDropGuard::new(deliverable, outer_span.id());
 
         let start_time = Instant::now();
 
+        let inner_span1 = outer_span.clone();
+        let inner_span2 = outer_span.clone();
+
         let request_future = async move {
-            trace!("Sending request: {:?}", request);
+            trace!("Sending request");
             match client.request(request).await {
                 Ok(response) => {
                     if requires_body {
@@ -121,6 +159,9 @@ impl<D: Deliverable> Transaction<D> {
                         }
 
                         let body_size = body_vec.len();
+
+                        inner_span1.record("http.request_content_length", &body_size);
+
                         Ok((
                             Response::from_parts(parts, Body::empty()),
                             Some(body_vec),
@@ -137,6 +178,8 @@ impl<D: Deliverable> Transaction<D> {
                             body_len += chunk.len();
                         }
 
+                        inner_span1.record("http.request_content_length", &body_len);
+
                         Ok((Response::from_parts(parts, Body::empty()), None, body_len))
                     }
                 }
@@ -144,57 +187,60 @@ impl<D: Deliverable> Transaction<D> {
             }
         };
 
-        tokio::spawn(async move {
-            let result = tokio::time::timeout(timeout, request_future).await;
-            let duration = start_time.elapsed();
+        tokio::spawn(
+            async move {
+                let result = tokio::time::timeout(timeout, request_future).await;
+                let duration = start_time.elapsed();
 
-            let delivery_result = match result {
-                Ok(Ok((response, body, body_size))) => {
-                    trace!(
-                        "Finished transaction with response: {:?}, duration: {:?}",
-                        response,
-                        duration
-                    );
-                    DeliveryResult::Response {
-                        response,
-                        body,
-                        body_size,
-                        duration,
+                let delivery_result = match result {
+                    Ok(Ok((response, body, body_size))) => {
+                        inner_span2.record("http.status_code", &response.status().as_u16());
+                        inner_span2.record("outcome", &"http success");
+                        trace!(?response, ?duration, "Finished transaction",);
+                        DeliveryResult::Response {
+                            response,
+                            body,
+                            body_size,
+                            duration,
+                        }
                     }
-                }
 
-                Ok(Err(hyper_error)) => {
-                    trace!(
-                        "Transaction errored during delivery, error: {:?}, duration: {:?}",
-                        hyper_error,
-                        duration
-                    );
-                    DeliveryResult::HyperError {
-                        error: hyper_error,
-                        duration,
+                    Ok(Err(hyper_error)) => {
+                        inner_span2.record("outcome", &"http error");
+                        trace!(
+                            error = ?hyper_error,
+                            ?duration,
+                            "Transaction errored during delivery",
+                        );
+                        DeliveryResult::HyperError {
+                            error: hyper_error,
+                            duration,
+                        }
                     }
-                }
 
-                Err(_) => {
-                    trace!(
-                        "Transaction timed out, duration: {:?}, timeout limit: {:?}",
-                        duration,
-                        timeout
-                    );
-                    DeliveryResult::Timeout { duration }
-                }
-            };
+                    Err(_) => {
+                        inner_span2.record("outcome", &"timeout");
+                        trace!(
+                            ?duration,
+                            timeout_limit = ?timeout,
+                            "Transaction timed out",
+                        );
+                        DeliveryResult::Timeout { duration }
+                    }
+                };
 
-            deliverable_guard.take().complete(delivery_result);
+                deliverable_guard.take().complete(delivery_result);
 
-            drop(counter);
-        });
+                drop(counter);
+            }
+            .instrument(outer_span),
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
-    extern crate env_logger;
+    extern crate tracing_subscriber;
 
     use hyper;
     use hyper::client::connect::HttpConnector;
@@ -203,6 +249,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use tokio::time::sleep;
+    use tracing::info;
 
     use super::*;
 
@@ -292,7 +339,7 @@ mod tests {
 
     #[tokio::test]
     async fn timed_out_transactions_get_sent_to_deliverable() {
-        let _ = env_logger::try_init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         info!("test start");
 

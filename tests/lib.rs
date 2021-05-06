@@ -1,10 +1,10 @@
 #[macro_use]
 extern crate lazy_static;
 
-extern crate env_logger;
 extern crate hyper_client_pool;
 extern crate ipnet;
 extern crate regex;
+extern crate tracing_subscriber;
 
 use futures::{channel::mpsc, prelude::*};
 use std::net::IpAddr;
@@ -82,7 +82,7 @@ fn assert_successful_result(result: DeliveryResult) {
 async fn some_gets_single_worker() {
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let mut config = default_config();
     config.workers = 1;
@@ -107,7 +107,7 @@ async fn ton_of_gets() {
     const REQUEST_AMOUNT: usize = 600;
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let mut config = default_config();
     config.dns_threads_per_worker = 4;
@@ -185,7 +185,7 @@ impl Deliverable for SuccessfulCompletionCounter {
 async fn graceful_shutdown() {
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let txn = 20;
     let counter = SuccessfulCompletionCounter::new();
@@ -207,7 +207,7 @@ async fn graceful_shutdown() {
 async fn full_error() {
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let mut config = default_config();
     config.workers = 3;
@@ -326,7 +326,7 @@ async fn keep_alive_works_as_expected() {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let mut config = default_config();
     config.keep_alive_timeout = Duration::from_secs(3);
@@ -368,7 +368,7 @@ async fn connection_reuse_works_as_expected() {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let mut config = default_config();
     // note that workers must be one otherwise the second transaction will be
@@ -405,7 +405,7 @@ async fn connection_reuse_works_as_expected() {
 async fn timeout_works_as_expected() {
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let mut config = default_config();
     config.transaction_timeout = Duration::from_secs(2);
@@ -438,7 +438,7 @@ async fn timeout_works_as_expected() {
 async fn transaction_counting_works() {
     let _read = TEST_LOCK.read().unwrap_or_else(|e| e.into_inner());
 
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let mut config = default_config();
     config.workers = 3;

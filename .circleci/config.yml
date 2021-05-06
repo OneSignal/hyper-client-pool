@@ -1,0 +1,34 @@
+version: 2.1
+
+jobs:
+  build:
+    docker:
+      - image: osig/rust-ubuntu:1.46-ruby-capnp
+      - image: vimagick/httpbin
+        name: httpbin
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - v1-cargo-cache-{{ checksum "Cargo.toml" }}
+            - v1-cargo-cache-
+      - run: cargo test --all --all-features -- --test-threads=1
+      - run: cargo fmt -- --check
+      - save_cache:
+          key: v1-cargo-cache-{{ checksum "Cargo.toml" }}
+          paths:
+            - /usr/local/cargo/registry
+            - target
+            - target/debug/.fingerprint
+            - target/debug/build
+            - target/debug/deps
+            - target/release/.fingerprint
+            - target/release/build
+            - target/release/deps
+            - /usr/local/cargo/bin
+
+workflows:
+  version: 2
+  build:
+    jobs:
+      - build
