@@ -9,7 +9,7 @@ use hyper::{Body, Response};
 
 use crate::deliverable::Deliverable;
 use raii_counter::Counter;
-use tracing::{debug_span, trace, Instrument};
+use tracing::{info_span, trace, Instrument};
 
 /// The result of the transaction, a message sent to the
 /// deliverable.
@@ -125,7 +125,7 @@ impl<D: Deliverable> Transaction<D> {
             span_id,
         } = self;
 
-        let outer_span = debug_span!(
+        let outer_span = info_span!(
             parent: span_id,
             "http_request",
             otel.kind = "client",
