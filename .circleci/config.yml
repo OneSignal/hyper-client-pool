@@ -3,7 +3,7 @@ version: 2.1
 jobs:
   build:
     docker:
-      - image: osig/rust-ubuntu:1.46-ruby-capnp
+      - image: rust:1-buster
       - image: vimagick/httpbin
         name: httpbin
     steps:
