@@ -1,4 +1,4 @@
-FROM osig/rust-ubuntu:1.46
+FROM rust:1-buster
 
 RUN apt-get update && apt-get install -y git ssh lsof
 
