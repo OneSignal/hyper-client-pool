@@ -9,7 +9,7 @@ use hyper::{Body, Response};
 
 use crate::deliverable::Deliverable;
 use raii_counter::Counter;
-use tracing::{info_span, trace, Instrument};
+use tracing::{span, trace, Instrument};
 
 /// The result of the transaction, a message sent to the
 /// deliverable.
@@ -125,8 +125,16 @@ impl<D: Deliverable> Transaction<D> {
             span_id,
         } = self;
 
-        let outer_span = info_span!(
+        // Creating a span per transaction can be a non-trivial CPU cost so hide it behind a feature flag
+        const TRANSACTION_SPAN_LEVEL: tracing::Level = if cfg!(feature = "transaction-tracing") {
+            tracing::Level::INFO
+        } else {
+            tracing::Level::TRACE
+        };
+
+        let outer_span = span!(
             parent: span_id,
+            TRANSACTION_SPAN_LEVEL,
             "http_request",
             otel.kind = "client",
             http.url = %request.uri(),

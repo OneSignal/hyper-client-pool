@@ -1,13 +1,22 @@
 [package]
 name = "hyper-client-pool"
-version = "0.5.1"
+version = "0.6.0"
 authors = ["Joe Wilm <joe@jwilm.com>"]
 description = "Pooled Hyper Async Clients"
 license = "MIT OR Apache-2.0"
 edition = "2018"
 
+[features]
+default = ["transaction-tracing"]
+transaction-tracing = []
+
 [dependencies]
-hyper = { version = "0.14", features = ["client", "http1", "stream", "runtime"] }
+hyper = { version = "0.14", features = [
+    "client",
+    "http1",
+    "stream",
+    "runtime",
+] }
 native-tls = "0.2"
 hyper-tls = "0.5"
 tokio-native-tls = "0.3"
