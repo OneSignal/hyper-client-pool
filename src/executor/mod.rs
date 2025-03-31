@@ -1,14 +1,17 @@
 //! HTTP Client Worker Pool
 //!
 //! This module provides a simple API wrapping a pool of HTTP clients
+use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures::channel::mpsc as FuturesMpsc;
 use futures::prelude::*;
-use hyper::client::connect::{Connect, HttpConnector};
-use hyper::{self, client::Client};
+use hyper::body::Body;
 use hyper_tls::HttpsConnector;
+use hyper_util::client::legacy::connect::{Connect, HttpConnector};
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::{TokioExecutor, TokioTimer};
 use tokio::task::JoinHandle;
 use tracing::{info, trace};
 
@@ -25,28 +28,31 @@ pub use self::transaction_counter::TransactionCounter;
 
 /// Lives on a separate thread running a tokio_core::Reactor
 /// and runs Transactions sent by the Pool.
-pub(crate) struct Executor<D: Deliverable, C: 'static + Connect> {
-    client: Arc<Client<C>>,
+pub(crate) struct Executor<D: Deliverable, C: 'static + Connect, B: Body + Debug + Send + 'static> {
+    client: Arc<Client<C, B>>,
     transaction_counter: WeakCounter,
     transaction_timeout: Duration,
-    receiver: FuturesMpsc::UnboundedReceiver<ExecutorMessage<D>>,
+    receiver: FuturesMpsc::UnboundedReceiver<ExecutorMessage<D, B>>,
 }
 
 /// The handle to the Executor. It lives on the Pool thread
 /// and allows message passing through futures::mpsc.
-pub(crate) struct ExecutorHandle<D: Deliverable> {
+pub(crate) struct ExecutorHandle<D: Deliverable, B: Body + Debug + Send + 'static> {
     transaction_counter: WeakCounter,
     worker_counter: Counter,
     max_transactions: usize,
 
-    sender: FuturesMpsc::UnboundedSender<ExecutorMessage<D>>,
+    sender: FuturesMpsc::UnboundedSender<ExecutorMessage<D, B>>,
     join_handle: JoinHandle<()>,
 }
 
-type ExecutorMessage<D> = (Transaction<D>, Counter);
+type ExecutorMessage<D, B> = (Transaction<D, B>, Counter);
 
-impl<D: Deliverable> ExecutorHandle<D> {
-    pub(crate) fn send(&mut self, transaction: Transaction<D>) -> Result<(), RequestError<D>> {
+impl<D: Deliverable, B: Body + Debug + Send + 'static> ExecutorHandle<D, B> {
+    pub(crate) fn send(
+        &mut self,
+        transaction: Transaction<D, B>,
+    ) -> Result<(), RequestError<D, B>> {
         if self.is_full() {
             return Err(RequestError::PoolFull(transaction));
         }
@@ -77,10 +83,21 @@ impl<D: Deliverable> ExecutorHandle<D> {
     }
 }
 
-impl<D: Deliverable, C: 'static + Connect + Clone + Send + Sync> Executor<D, C> {
-    pub fn spawn<A, R>(config: &Config, resolver: R) -> Result<ExecutorHandle<D>, SpawnError>
+impl<
+        D: Deliverable,
+        C: 'static + Connect + Clone + Send + Sync,
+        B: Body + Debug + Send + 'static,
+    > Executor<D, C, B>
+where
+    B::Data: Send,
+    B::Error: std::error::Error + Send + Sync,
+    B: Unpin,
+{
+    pub fn spawn<A, R>(config: &Config, resolver: R) -> Result<ExecutorHandle<D, B>, SpawnError>
     where
         A: ConnectorAdaptor<R, Connect = C>,
+        B: Body + Send + 'static,
+        B::Data: Send,
     {
         let (tx, rx) = FuturesMpsc::unbounded();
         let weak_counter = WeakCounter::new();
@@ -103,12 +120,13 @@ impl<D: Deliverable, C: 'static + Connect + Clone + Send + Sync> Executor<D, C> 
         let connector = A::wrap(HttpsConnector::from((http, tls)));
 
         let client = Arc::new(
-            Client::builder()
+            Client::builder(TokioExecutor::new())
                 .pool_idle_timeout(Some(keep_alive_timeout))
+                .pool_timer(TokioTimer::new())
                 .build(connector),
         );
 
-        let executor = Executor::<D, C> {
+        let executor = Executor::<D, C, B> {
             receiver: rx,
             transaction_counter: weak_counter_clone,
             client,

@@ -1,11 +1,11 @@
+use std::fmt::Debug;
+
 use crate::deliverable::Deliverable;
-use hyper::client::{
-    connect::{
-        dns::{GaiResolver, Name},
-        Connect,
-    },
-    HttpConnector,
-};
+
+use hyper::body::Body;
+use hyper_util::client::legacy::connect::dns::{GaiResolver, Name};
+use hyper_util::client::legacy::connect::{Connect, HttpConnector};
+
 use hyper_tls::HttpsConnector;
 use std::sync::{Arc, RwLock};
 use std::{marker::PhantomData, net::SocketAddr};
@@ -59,40 +59,54 @@ impl CreateResolver for DefaultResolver {
 /// Default type that implemented ConnectorAdaptor, just passes through the connector
 pub struct DefaultConnectorAdapator;
 
-pub struct PoolBuilder<D: Deliverable> {
+pub struct PoolBuilder<D: Deliverable, B: Body + Debug + Send + 'static>
+where
+    B::Data: Send,
+{
     pub(in crate::pool) config: Config,
     pub(in crate::pool) transaction_counters: Option<Arc<RwLock<Vec<TransactionCounter>>>>,
 
     _d: PhantomData<D>,
+    _b: PhantomData<B>,
 }
 
-impl<D: Deliverable> PoolBuilder<D> {
-    pub(in crate::pool) fn new(config: Config) -> PoolBuilder<D> {
+impl<D: Deliverable, B: Body + Debug + Send + 'static> PoolBuilder<D, B>
+where
+    B::Data: Send,
+    B::Error: std::error::Error + Send + Sync,
+    B: Unpin,
+{
+    pub(in crate::pool) fn new(config: Config) -> PoolBuilder<D, B> {
         PoolBuilder {
             config,
             transaction_counters: None,
 
             _d: PhantomData,
+            _b: PhantomData,
         }
     }
 
-    pub fn build(self) -> Result<Pool<D>, SpawnError> {
+    pub fn build(self) -> Result<Pool<D, B>, SpawnError> {
         self.build_with_adaptor::<DefaultConnectorAdapator>()
     }
 
     /// Create the pool with a ConnectorAdaptor, a type that is used to
     /// wrap the hyper::Client's connector
-    pub fn build_with_adaptor<A>(self) -> Result<Pool<D>, SpawnError>
+    pub fn build_with_adaptor<A>(self) -> Result<Pool<D, B>, SpawnError>
     where
         A: ConnectorAdaptor<GaiResolver>,
         A::Connect: 'static + Clone + Send + Sync,
+        B: Body + Send + 'static,
+        B::Data: Send,
+        B::Error: std::error::Error + Send + Sync,
+        B: Unpin,
     {
         self.build_with_adaptor_and_resolver::<A, DefaultResolver>()
     }
 
     /// Create the pool with a ConnectorAdaptor, a type that is used to
     /// wrap the hyper::Client's connector
-    pub fn build_with_adaptor_and_resolver<A, CR>(self) -> Result<Pool<D>, SpawnError>
+    pub fn build_with_adaptor_and_resolver<A, CR>(self) -> Result<Pool<D, B>, SpawnError>
     where
         A: ConnectorAdaptor<CR::Resolver>,
         A::Connect: 'static + Clone + Send + Sync,
@@ -101,6 +115,10 @@ impl<D: Deliverable> PoolBuilder<D> {
         CR::Error: 'static + Send + Sync + std::error::Error,
         CR::Future: Send + std::future::Future<Output = Result<CR::Response, CR::Error>>,
         CR::Response: Iterator<Item = SocketAddr>,
+        B: Body + Send + 'static,
+        B::Data: Send,
+        B::Error: std::error::Error + Send + Sync,
+        B: Unpin,
     {
         Pool::new::<A, CR>(self)
     }
