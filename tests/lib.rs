@@ -7,6 +7,8 @@ extern crate regex;
 extern crate tracing_subscriber;
 
 use futures::{channel::mpsc, prelude::*};
+use http_body_util::Empty;
+use hyper::body::Bytes;
 use std::net::IpAddr;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,7 +16,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
-use hyper::{Body, Request};
+use hyper::Request;
 use hyper_client_pool::*;
 use ipnet::{Contains, IpNet};
 use regex::Regex;
@@ -45,22 +47,22 @@ fn default_config() -> Config {
     }
 }
 
-fn onesignal_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
+fn onesignal_transaction<D: Deliverable>(deliverable: D) -> Transaction<D, Empty<Bytes>> {
     Transaction::new(
         deliverable,
         Request::get("https://onesignal.com/")
-            .body(Body::empty())
+            .body(http_body_util::Empty::new())
             .unwrap(),
         false,
     )
 }
 
-fn httpbin_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
+fn httpbin_transaction<D: Deliverable>(deliverable: D) -> Transaction<D, Empty<Bytes>> {
     Transaction::new(
         deliverable,
         // This needs to be localhost if run locally
         Request::get("http://httpbin:8000/ip")
-            .body(Body::empty())
+            .body(http_body_util::Empty::new())
             .unwrap(),
         false,
     )
@@ -427,7 +429,7 @@ async fn timeout_works_as_expected() {
         Transaction::new(
             MspcDeliverable(tx.clone()),
             Request::get("https://httpstat.us/200?sleep=5000")
-                .body(Body::empty())
+                .body(http_body_util::Empty::<Bytes>::new())
                 .unwrap(),
             false,
         ),

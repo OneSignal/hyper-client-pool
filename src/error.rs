@@ -1,4 +1,7 @@
+use std::fmt::Debug;
 use std::io;
+
+use hyper::body::Body;
 
 use crate::deliverable::Deliverable;
 use crate::transaction::Transaction;
@@ -33,17 +36,17 @@ impl From<native_tls::Error> for SpawnError {
 
 /// An error returned when requesting a Transaction.
 #[derive(Debug)]
-pub struct Error<D: Deliverable> {
+pub struct Error<D: Deliverable, B: Body + Debug + Send + 'static> {
     pub kind: ErrorKind,
-    transaction: Transaction<D>,
+    transaction: Transaction<D, B>,
 }
 
-impl<D: Deliverable> Error<D> {
-    pub(crate) fn new(kind: ErrorKind, transaction: Transaction<D>) -> Error<D> {
+impl<D: Deliverable, B: Body + Debug + Send + 'static> Error<D, B> {
+    pub(crate) fn new(kind: ErrorKind, transaction: Transaction<D, B>) -> Error<D, B> {
         Error { kind, transaction }
     }
 
-    pub fn into_inner(self) -> Transaction<D> {
+    pub fn into_inner(self) -> Transaction<D, B> {
         self.transaction
     }
 }
@@ -61,7 +64,7 @@ pub enum ErrorKind {
 
 /// Type of errors that can occur when attempting to send a [`Transaction`]
 /// to an [`Executor`].
-pub(crate) enum RequestError<D: Deliverable> {
-    PoolFull(Transaction<D>),
-    FailedSend(Transaction<D>),
+pub(crate) enum RequestError<D: Deliverable, B: Body + Debug + Send + 'static> {
+    PoolFull(Transaction<D, B>),
+    FailedSend(Transaction<D, B>),
 }

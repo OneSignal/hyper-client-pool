@@ -1,6 +1,6 @@
 [package]
 name = "hyper-client-pool"
-version = "0.6.1"
+version = "0.7.0"
 authors = ["Joe Wilm <joe@jwilm.com>"]
 description = "Pooled Hyper Async Clients"
 license = "MIT OR Apache-2.0"
@@ -11,14 +11,9 @@ default = ["transaction-tracing"]
 transaction-tracing = []
 
 [dependencies]
-hyper = { version = "0.14", features = [
-    "client",
-    "http1",
-    "stream",
-    "runtime",
-] }
+hyper = { version = "1", features = ["client", "http1"] }
 native-tls = "0.2"
-hyper-tls = "0.5"
+hyper-tls = "0.6"
 tokio-native-tls = "0.3"
 futures = "0.3"
 tokio = { version = "1.5", features = ["time"] }
@@ -27,6 +22,9 @@ raii-counter = "0.1"
 tower-service = "0.3.0"
 tracing = "0.1"
 tracing-futures = "0.2"
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
+
 
 [dev-dependencies]
 lazy_static = "1.0"

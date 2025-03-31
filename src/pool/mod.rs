@@ -1,10 +1,13 @@
 //! HTTP Client Worker Pool
 //!
 //! This module provides a simple API wrapping a pool of HTTP clients
+use std::fmt::Debug;
 use std::{cmp, net::SocketAddr};
 
 use fpool::RoundRobinPool;
-use hyper::client::connect::dns::Name;
+
+use hyper::body::Body;
+use hyper_util::client::legacy::connect::dns::Name;
 use tower_service::Service;
 
 use crate::config::Config;
@@ -27,16 +30,21 @@ pub use self::builder::{
 /// active transactions running on each client is tracked so that max_transactions_per_worker
 /// is respected. When all clients are full, backpressure is provided in the
 /// form of an Error variant saying "busy; try again later".
-pub struct Pool<D: Deliverable> {
-    executor_handles: RoundRobinPool<ExecutorHandle<D>, SpawnError>,
+pub struct Pool<D: Deliverable, B: Body + Debug + Send + 'static> {
+    executor_handles: RoundRobinPool<ExecutorHandle<D, B>, SpawnError>,
 }
 
-impl<D: Deliverable> Pool<D> {
-    pub fn builder(config: Config) -> PoolBuilder<D> {
+impl<D: Deliverable, B: Body + Debug + Send + 'static> Pool<D, B>
+where
+    B::Data: Send,
+    B::Error: std::error::Error + Send + Sync,
+    B: Unpin,
+{
+    pub fn builder(config: Config) -> PoolBuilder<D, B> {
         PoolBuilder::new(config)
     }
 
-    pub(in crate::pool) fn new<A, CR>(builder: PoolBuilder<D>) -> Result<Pool<D>, SpawnError>
+    pub(in crate::pool) fn new<A, CR>(builder: PoolBuilder<D, B>) -> Result<Pool<D, B>, SpawnError>
     where
         A: ConnectorAdaptor<CR::Resolver>,
         A::Connect: 'static + Clone + Send + Sync,
@@ -45,6 +53,10 @@ impl<D: Deliverable> Pool<D> {
         CR::Error: 'static + Send + Sync + std::error::Error,
         CR::Future: Send + std::future::Future<Output = Result<CR::Response, CR::Error>>,
         CR::Response: Iterator<Item = SocketAddr>,
+        B: Body + Debug + Send + 'static,
+        B::Data: Send,
+        B::Error: std::error::Error + Send + Sync,
+        B: Unpin,
     {
         let PoolBuilder {
             mut config,
@@ -82,12 +94,16 @@ impl<D: Deliverable> Pool<D> {
     ///
     /// The request will be started immediately assuming one of the clients in
     /// this pool is not at max_sockets.
-    pub fn request(&mut self, transaction: Transaction<D>) -> Result<(), Error<D>> {
+    pub fn request(&mut self, transaction: Transaction<D, B>) -> Result<(), Error<D, B>> {
         let size = self.executor_handles.size();
         self.request_inner(transaction, size)
     }
 
-    fn request_inner(&mut self, transaction: Transaction<D>, count: usize) -> Result<(), Error<D>> {
+    fn request_inner(
+        &mut self,
+        transaction: Transaction<D, B>,
+        count: usize,
+    ) -> Result<(), Error<D, B>> {
         if count == 0 {
             return Err(Error::new(ErrorKind::PoolFull, transaction));
         }

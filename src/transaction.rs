@@ -1,11 +1,15 @@
-use std::fmt;
+use std::fmt::{self, Debug};
+use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures::prelude::*;
-use hyper::client::connect::Connect;
-use hyper::{self, client::Client, Request};
-use hyper::{Body, Response};
+use futures::StreamExt;
+use http_body_util::{BodyExt, Empty};
+use hyper::body::Body;
+use hyper::Response;
+use hyper::{self, Request};
+use hyper_util::client::legacy::connect::Connect;
+use hyper_util::client::legacy::Client;
 
 use crate::deliverable::Deliverable;
 use raii_counter::Counter;
@@ -23,7 +27,7 @@ pub enum DeliveryResult {
 
     /// Received a response from the external server.
     Response {
-        response: Response<Body>,
+        response: Response<Empty<Vec<u8>>>,
         body: Option<Vec<u8>>,
         body_size: usize,
         duration: Duration,
@@ -34,26 +38,35 @@ pub enum DeliveryResult {
 
     /// Sending a request through hyper encountered an error.
     HyperError {
-        error: hyper::Error,
+        error: HyperJointError,
         duration: Duration,
     },
 }
 
+// In 1.x the client was punted to a "legacy" namespace
+// in a new crate, which means the error types are distinct now
+#[derive(Debug)]
+pub enum HyperJointError {
+    Legacy(hyper_util::client::legacy::Error),
+    Mainline(hyper::Error),
+}
+
 /// A container type for a [`hyper::Request`] as well as the deliverable
 /// which receives the result of the request.
-pub struct Transaction<D: Deliverable> {
+pub struct Transaction<D: Deliverable, B: Body + Debug + Send + 'static> {
     deliverable: D,
-    request: Request<Body>,
+    request: Request<B>,
     requires_body: bool,
     span_id: Option<tracing::Id>,
 }
 
-struct DeliverableDropGuard<D: Deliverable> {
+struct DeliverableDropGuard<D: Deliverable, B: Body + Debug + Send + 'static> {
     deliverable: Option<D>,
     span_id: Option<tracing::Id>,
+    _b: PhantomData<B>,
 }
 
-impl<D: Deliverable> Drop for DeliverableDropGuard<D> {
+impl<D: Deliverable, B: Body + Debug + Send + 'static> Drop for DeliverableDropGuard<D, B> {
     fn drop(&mut self) {
         self.deliverable.take().map(|deliverable| {
             trace!(parent: self.span_id.clone(), "Dropping transaction..");
@@ -62,11 +75,12 @@ impl<D: Deliverable> Drop for DeliverableDropGuard<D> {
     }
 }
 
-impl<D: Deliverable> DeliverableDropGuard<D> {
+impl<D: Deliverable, B: Body + Debug + Send + 'static> DeliverableDropGuard<D, B> {
     fn new(deliverable: D, span_id: Option<tracing::Id>) -> Self {
         Self {
             deliverable: Some(deliverable),
             span_id,
+            _b: PhantomData,
         }
     }
 
@@ -77,7 +91,7 @@ impl<D: Deliverable> DeliverableDropGuard<D> {
     }
 }
 
-impl<D: Deliverable> fmt::Debug for Transaction<D> {
+impl<D: Deliverable, B: Body + Debug + Send + 'static> fmt::Debug for Transaction<D, B> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
@@ -87,8 +101,13 @@ impl<D: Deliverable> fmt::Debug for Transaction<D> {
     }
 }
 
-impl<D: Deliverable> Transaction<D> {
-    pub fn new(deliverable: D, request: Request<Body>, requires_body: bool) -> Transaction<D> {
+impl<D: Deliverable, B: Body + Debug + Send + 'static> Transaction<D, B>
+where
+    B::Data: Send,
+    B::Error: std::error::Error + Send + Sync,
+    B: Unpin,
+{
+    pub fn new(deliverable: D, request: Request<B>, requires_body: bool) -> Transaction<D, B> {
         Transaction {
             deliverable,
             request,
@@ -114,7 +133,7 @@ impl<D: Deliverable> Transaction<D> {
 
     pub(crate) fn spawn_request<C: 'static + Connect + Clone + Send + Sync>(
         self,
-        client: Arc<Client<C>>,
+        client: Arc<Client<C, B>>,
         timeout: Duration,
         counter: Counter,
     ) {
@@ -147,7 +166,7 @@ impl<D: Deliverable> Transaction<D> {
             outcome = tracing::field::Empty,
         );
 
-        let deliverable_guard = DeliverableDropGuard::new(deliverable, outer_span.id());
+        let deliverable_guard = DeliverableDropGuard::<D, B>::new(deliverable, outer_span.id());
 
         let start_time = Instant::now();
 
@@ -159,39 +178,45 @@ impl<D: Deliverable> Transaction<D> {
             match client.request(request).await {
                 Ok(response) => {
                     if requires_body {
-                        let (parts, mut body) = response.into_parts();
-                        let mut body_vec = Vec::new();
+                        let (parts, body) = response.into_parts();
 
-                        while let Some(Ok(chunk)) = body.next().await {
-                            body_vec.extend_from_slice(&*chunk);
+                        match body.collect().await {
+                            Ok(body) => {
+                                let body = body.to_bytes().to_vec();
+                                let body_size = body.len();
+
+                                inner_span1.record("http.request_content_length", &body_size);
+
+                                Ok((
+                                    Response::from_parts(parts, http_body_util::Empty::new()),
+                                    Some(body),
+                                    body_size,
+                                ))
+                            }
+                            Err(e) => Err(HyperJointError::Mainline(e)),
                         }
-
-                        let body_size = body_vec.len();
-
-                        inner_span1.record("http.request_content_length", &body_size);
-
-                        Ok((
-                            Response::from_parts(parts, Body::empty()),
-                            Some(body_vec),
-                            body_size,
-                        ))
                     } else {
                         // Note that you must consume the body if you want keepalive
                         // to take affect.
-                        let (parts, mut body) = response.into_parts();
+                        let (parts, body) = response.into_parts();
+
+                        let mut stream = body.into_data_stream();
 
                         let mut body_len = 0;
-
-                        while let Some(Ok(chunk)) = body.next().await {
+                        while let Some(Ok(chunk)) = stream.next().await {
                             body_len += chunk.len();
                         }
 
                         inner_span1.record("http.request_content_length", &body_len);
 
-                        Ok((Response::from_parts(parts, Body::empty()), None, body_len))
+                        Ok((
+                            Response::from_parts(parts, http_body_util::Empty::new()),
+                            None,
+                            body_len,
+                        ))
                     }
                 }
-                Err(e) => Err(e),
+                Err(e) => Err(HyperJointError::Legacy(e)),
             }
         };
 
@@ -251,9 +276,12 @@ mod tests {
     extern crate tracing_subscriber;
 
     use hyper;
-    use hyper::client::connect::HttpConnector;
+    use hyper::body::Bytes;
     use hyper::Request;
     use hyper_tls::HttpsConnector;
+    use hyper_util::client::legacy::connect::{Connect, HttpConnector};
+    use hyper_util::client::legacy::Client;
+    use hyper_util::rt::TokioExecutor;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use tokio::time::sleep;
@@ -318,7 +346,7 @@ mod tests {
     const TRANSACTION_SPAWN_COUNT: usize = 200;
     const TIMEOUT_COUNT: usize = 50;
 
-    fn make_requests<C>(client: Client<C>, counter: &DeliveryCounter)
+    fn make_requests<C>(client: Client<C, Empty<Bytes>>, counter: &DeliveryCounter)
     where
         C: 'static + Connect + Clone + Send + Sync,
     {
@@ -333,16 +361,18 @@ mod tests {
 
             let transaction = Transaction::new(
                 counter.clone(),
-                Request::get(url).body(Body::empty()).unwrap(),
+                Request::get(url)
+                    .body(http_body_util::Empty::new())
+                    .unwrap(),
                 false,
             );
             transaction.spawn_request(Arc::clone(&client), Duration::from_secs(2), Counter::new());
         }
     }
 
-    fn test_hyper_client() -> Client<HttpsConnector<HttpConnector>> {
+    fn test_hyper_client() -> Client<HttpsConnector<HttpConnector>, Empty<Bytes>> {
         let connector = HttpsConnector::new();
-        Client::builder().build(connector)
+        Client::builder(TokioExecutor::new()).build(connector)
     }
 
     #[tokio::test]
