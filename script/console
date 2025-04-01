@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+# Purpose:
+#
+# Opens a bash prompt in the docker container.
+
+set -e
+[ -z "${DEBUG}" ] || set -x
+
+cd "$(dirname "$0")/.."
+
+docker compose exec hyper-client-pool bash

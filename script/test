@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+
+set -e
+[ -z "${DEBUG}" ] || set -x
+
+cargo test --all --all-features -- --test-threads=1

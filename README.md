@@ -2,27 +2,24 @@ hyper-client-pool
 ======
 
 ## Building the dev environment
-Build the docker image for hyper-client-pool:
+Build and start up the docker compose environment:
 ```
-docker-compose build
-```
-
-Start the docker compose environment:
-```
-docker-compose up -d
+./script/up
 ```
 
 Start the tty in the hyper-client-pool container:
 ```
-docker-compose exec hyper-client-pool bash
+./script/console
 ```
 
 Now you can run the tests, etc:
 ```
-cargo test
+./script/test
 ```
+
+Note: You _can not_ successfully run tests outside of the container. Some tests will hang, others fails.
 
 You can tear down the dev environment with:
 ```
-docker-compose down
+./script/down
 ```
