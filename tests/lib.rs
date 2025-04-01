@@ -8,10 +8,11 @@ extern crate tracing_subscriber;
 
 use futures::{channel::mpsc, prelude::*};
 use std::net::IpAddr;
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use hyper::{Body, Request};
 use hyper_client_pool::*;
@@ -57,7 +58,8 @@ fn onesignal_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
 fn httpbin_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
     Transaction::new(
         deliverable,
-        Request::get("http://httpbin:80/ip")
+        // This needs to be localhost if run locally
+        Request::get("http://httpbin:8000/ip")
             .body(Body::empty())
             .unwrap(),
         false,
@@ -66,7 +68,10 @@ fn httpbin_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
 
 fn check_successful_result(result: DeliveryResult) -> (bool, DeliveryResult) {
     let successful = match result {
-        DeliveryResult::Response { ref response, .. } => response.status().is_success(),
+        DeliveryResult::Response { ref response, .. } => {
+            // Onesignal is returning 302
+            response.status().is_success() || response.status().is_redirection()
+        }
         _ => false,
     };
     (successful, result)
@@ -120,6 +125,8 @@ async fn ton_of_gets() {
     for _ in 0..REQUEST_AMOUNT {
         pool.request(httpbin_transaction(MspcDeliverable(tx.clone())))
             .expect("request ok");
+        // If we go _too_ fast we get many `Too many open files`
+        tokio::time::sleep(Duration::from_millis(1)).await;
     }
 
     let mut successes = 0i32;
@@ -291,6 +298,8 @@ fn matches_cloudflare_ip_works_as_expected() {
     assert_eq!(matches_cloudflare_ip(input2), true);
 }
 
+// Tests that use onesignal_connection_count _only_ work when run inside docker container
+// They hang otherwise
 fn onesignal_connection_count() -> (usize, String) {
     let output = Command::new("lsof")
         .args(&["-i"])
