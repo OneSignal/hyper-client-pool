@@ -8,11 +8,10 @@ extern crate tracing_subscriber;
 
 use futures::{channel::mpsc, prelude::*};
 use std::net::IpAddr;
-use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use hyper::{Body, Request};
 use hyper_client_pool::*;
