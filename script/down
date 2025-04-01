@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+
+set -e
+[ -z "${DEBUG}" ] || set -x
+
+docker compose down
