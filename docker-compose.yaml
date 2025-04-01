@@ -1,4 +1,3 @@
-version: "3.2"
 services:
   # We start this service with just a bash shell. It doesn't run anything in the default mode,
   # its essentially just a tty interface so we can run whatever commands we need to.
