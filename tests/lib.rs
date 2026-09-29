@@ -478,7 +478,7 @@ async fn transaction_counting_works() {
             assert!(transaction_count <= 1);
         }
 
-        if let Ok(Some(recv)) = rx.try_next() {
+        if let Ok(recv) = rx.try_recv() {
             assert_successful_result(recv);
             received += 1;
 
