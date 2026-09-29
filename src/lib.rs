@@ -15,7 +15,6 @@ mod error;
 mod executor;
 mod pool;
 mod transaction;
-mod util;
 
 pub use config::Config;
 pub use deliverable::Deliverable;
