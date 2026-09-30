@@ -158,38 +158,19 @@ impl<D: Deliverable> Transaction<D> {
             trace!("Sending request");
             match client.request(request).await {
                 Ok(response) => {
-                    if requires_body {
-                        let (parts, mut body) = response.into_parts();
-                        let mut body_vec = Vec::new();
+                    let (parts, mut body) = response.into_parts();
+                    let mut body_vec = Vec::new();
 
-                        while let Some(Ok(chunk)) = body.next().await {
-                            body_vec.extend_from_slice(&*chunk);
-                        }
-
-                        let body_size = body_vec.len();
-
-                        inner_span1.record("http.request_content_length", &body_size);
-
-                        Ok((
-                            Response::from_parts(parts, Body::empty()),
-                            Some(body_vec),
-                            body_size,
-                        ))
-                    } else {
-                        // Note that you must consume the body if you want keepalive
-                        // to take affect.
-                        let (parts, mut body) = response.into_parts();
-
-                        let mut body_len = 0;
-
-                        while let Some(Ok(chunk)) = body.next().await {
-                            body_len += chunk.len();
-                        }
-
-                        inner_span1.record("http.request_content_length", &body_len);
-
-                        Ok((Response::from_parts(parts, Body::empty()), None, body_len))
+                    while let Some(Ok(chunk)) = body.next().await {
+                        body_vec.extend_from_slice(&*chunk);
                     }
+                    let body_size = body_vec.len();
+
+                    inner_span1.record("http.request_content_length", &body_size);
+
+                    let body = if requires_body { Some(body_vec) } else { None };
+
+                    Ok((Response::from_parts(parts, Body::empty()), body, body_size))
                 }
                 Err(e) => Err(e),
             }
