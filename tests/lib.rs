@@ -50,7 +50,6 @@ fn onesignal_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
         Request::get("https://onesignal.com/")
             .body(Body::empty())
             .unwrap(),
-        false,
     )
 }
 
@@ -61,7 +60,6 @@ fn httpbin_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
         Request::get("http://httpbin:8000/ip")
             .body(Body::empty())
             .unwrap(),
-        false,
     )
 }
 
@@ -427,7 +425,6 @@ async fn timeout_works_as_expected() {
             Request::get("https://httpstat.us/200?sleep=5000")
                 .body(Body::empty())
                 .unwrap(),
-            false,
         ),
     )
     .expect("request ok");
