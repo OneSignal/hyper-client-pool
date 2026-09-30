@@ -26,7 +26,6 @@ fpool = "0.5"
 raii-counter = "0.1"
 tower-service = "0.3.0"
 tracing = "0.1"
-tracing-futures = "0.2"
 
 [dev-dependencies]
 lazy_static = "1.0"
