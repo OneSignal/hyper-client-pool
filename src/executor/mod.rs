@@ -6,9 +6,10 @@ use std::time::Duration;
 
 use futures::channel::mpsc as FuturesMpsc;
 use futures::prelude::*;
-use hyper::client::connect::{Connect, HttpConnector};
-use hyper::{self, client::Client};
 use hyper_tls::HttpsConnector;
+use hyper_util::client::legacy::connect::{Connect, HttpConnector};
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
 use tokio::task::JoinHandle;
 use tracing::{info, trace};
 
@@ -17,6 +18,7 @@ use crate::deliverable::Deliverable;
 use crate::error::{RequestError, SpawnError};
 use crate::pool::ConnectorAdaptor;
 use crate::transaction::Transaction;
+use crate::Body;
 use raii_counter::{Counter, WeakCounter};
 
 mod transaction_counter;
@@ -26,7 +28,7 @@ pub use self::transaction_counter::TransactionCounter;
 /// Lives on a separate thread running a tokio_core::Reactor
 /// and runs Transactions sent by the Pool.
 pub(crate) struct Executor<D: Deliverable, C: 'static + Connect> {
-    client: Arc<Client<C>>,
+    client: Arc<Client<C, Body>>,
     transaction_counter: WeakCounter,
     transaction_timeout: Duration,
     receiver: FuturesMpsc::UnboundedReceiver<ExecutorMessage<D>>,
@@ -103,7 +105,7 @@ impl<D: Deliverable, C: 'static + Connect + Clone + Send + Sync> Executor<D, C> 
         let connector = A::wrap(HttpsConnector::from((http, tls)));
 
         let client = Arc::new(
-            Client::builder()
+            Client::builder(TokioExecutor::new())
                 .pool_idle_timeout(Some(keep_alive_timeout))
                 .build(connector),
         );

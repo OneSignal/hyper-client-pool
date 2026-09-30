@@ -14,7 +14,8 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
-use hyper::{Body, Request};
+use bytes::Bytes;
+use hyper::Request;
 use hyper_client_pool::*;
 use ipnet::{Contains, IpNet};
 use regex::Regex;
@@ -48,7 +49,7 @@ fn onesignal_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
     Transaction::new(
         deliverable,
         Request::get("https://onesignal.com/")
-            .body(Body::empty())
+            .body(Body::new(Bytes::new()))
             .unwrap(),
     )
 }
@@ -58,7 +59,7 @@ fn httpbin_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
         deliverable,
         // This needs to be localhost if run locally
         Request::get("http://httpbin:8000/ip")
-            .body(Body::empty())
+            .body(Body::new(Bytes::new()))
             .unwrap(),
     )
 }
@@ -423,7 +424,7 @@ async fn timeout_works_as_expected() {
         Transaction::new(
             MspcDeliverable(tx.clone()),
             Request::get("https://httpstat.us/200?sleep=5000")
-                .body(Body::empty())
+                .body(Body::new(Bytes::new()))
                 .unwrap(),
         ),
     )

@@ -3,7 +3,7 @@ use std::io;
 use crate::deliverable::Deliverable;
 use crate::transaction::Transaction;
 
-/// Error when spawning and configuring the thread that the [`hyper::Client`]s run on.
+/// Error when spawning and configuring the thread that the `hyper_util::client::legacy::Client`s run on.
 #[derive(Debug)]
 pub enum SpawnError {
     ThreadSpawn(io::Error),
@@ -53,7 +53,7 @@ impl<D: Deliverable> Error<D> {
 /// spawned if a previous one was lost / invalidated.
 #[derive(Debug, PartialEq)]
 pub enum ErrorKind {
-    /// An error occurred when spawning and configuring a new thread for a hyper::Client
+    /// An error occurred when spawning and configuring a new thread for a hyper_util::client::legacy::Client
     Spawn(SpawnError),
     /// There is no room for another transaction right now, the pool is full.
     PoolFull,
