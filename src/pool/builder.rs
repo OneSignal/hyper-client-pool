@@ -1,12 +1,9 @@
 use crate::deliverable::Deliverable;
-use hyper::client::{
-    connect::{
-        dns::{GaiResolver, Name},
-        Connect,
-    },
-    HttpConnector,
-};
 use hyper_tls::HttpsConnector;
+use hyper_util::client::legacy::connect::{
+    dns::{GaiResolver, Name},
+    Connect, HttpConnector,
+};
 use std::sync::{Arc, RwLock};
 use std::{marker::PhantomData, net::SocketAddr};
 use tower_service::Service;
@@ -81,7 +78,7 @@ impl<D: Deliverable> PoolBuilder<D> {
     }
 
     /// Create the pool with a ConnectorAdaptor, a type that is used to
-    /// wrap the hyper::Client's connector
+    /// wrap the hyper_util::client::legacy::Client's connector
     pub fn build_with_adaptor<A>(self) -> Result<Pool<D>, SpawnError>
     where
         A: ConnectorAdaptor<GaiResolver>,
@@ -91,7 +88,7 @@ impl<D: Deliverable> PoolBuilder<D> {
     }
 
     /// Create the pool with a ConnectorAdaptor, a type that is used to
-    /// wrap the hyper::Client's connector
+    /// wrap the hyper_util::client::legacy::Client's connector
     pub fn build_with_adaptor_and_resolver<A, CR>(self) -> Result<Pool<D>, SpawnError>
     where
         A: ConnectorAdaptor<CR::Resolver>,
