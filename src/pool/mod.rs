@@ -12,7 +12,6 @@ use crate::deliverable::Deliverable;
 use crate::error::{Error, ErrorKind, RequestError, SpawnError};
 use crate::executor::{Executor, ExecutorHandle};
 use crate::transaction::Transaction;
-use crate::util::RwLockExt;
 
 mod builder;
 
@@ -66,8 +65,10 @@ impl<D: Deliverable> Pool<D> {
             if let (Ok(ref executor), Some(ref transaction_counters)) =
                 (executor.as_ref(), transaction_counters.as_ref())
             {
+                // We explicitly ignore poison here as this only powers metrics
                 transaction_counters
-                    .write_ignore_poison()
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner())
                     .push(executor.transaction_counter())
             }
 
