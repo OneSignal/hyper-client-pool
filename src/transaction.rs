@@ -24,7 +24,7 @@ pub enum DeliveryResult {
     /// Received a response from the external server.
     Response {
         response: Response<Body>,
-        body: Option<Vec<u8>>,
+        body: Vec<u8>,
         body_size: usize,
         duration: Duration,
     },
@@ -168,7 +168,7 @@ impl<D: Deliverable> Transaction<D> {
 
                     Ok((
                         Response::from_parts(parts, Body::empty()),
-                        Some(body_vec),
+                        body_vec,
                         body_size,
                     ))
                 }
