@@ -44,7 +44,6 @@ pub enum DeliveryResult {
 pub struct Transaction<D: Deliverable> {
     deliverable: D,
     request: Request<Body>,
-    requires_body: bool,
     span_id: Option<tracing::Id>,
 }
 
@@ -88,11 +87,10 @@ impl<D: Deliverable> fmt::Debug for Transaction<D> {
 }
 
 impl<D: Deliverable> Transaction<D> {
-    pub fn new(deliverable: D, request: Request<Body>, requires_body: bool) -> Transaction<D> {
+    pub fn new(deliverable: D, request: Request<Body>) -> Transaction<D> {
         Transaction {
             deliverable,
             request,
-            requires_body,
             span_id: None,
         }
     }
@@ -121,7 +119,6 @@ impl<D: Deliverable> Transaction<D> {
         let Transaction {
             deliverable,
             request,
-            requires_body,
             span_id,
         } = self;
 
@@ -158,38 +155,22 @@ impl<D: Deliverable> Transaction<D> {
             trace!("Sending request");
             match client.request(request).await {
                 Ok(response) => {
-                    if requires_body {
-                        let (parts, mut body) = response.into_parts();
-                        let mut body_vec = Vec::new();
+                    let (parts, mut body) = response.into_parts();
+                    let mut body_vec = Vec::new();
 
-                        while let Some(Ok(chunk)) = body.next().await {
-                            body_vec.extend_from_slice(&*chunk);
-                        }
-
-                        let body_size = body_vec.len();
-
-                        inner_span1.record("http.request_content_length", &body_size);
-
-                        Ok((
-                            Response::from_parts(parts, Body::empty()),
-                            Some(body_vec),
-                            body_size,
-                        ))
-                    } else {
-                        // Note that you must consume the body if you want keepalive
-                        // to take affect.
-                        let (parts, mut body) = response.into_parts();
-
-                        let mut body_len = 0;
-
-                        while let Some(Ok(chunk)) = body.next().await {
-                            body_len += chunk.len();
-                        }
-
-                        inner_span1.record("http.request_content_length", &body_len);
-
-                        Ok((Response::from_parts(parts, Body::empty()), None, body_len))
+                    while let Some(Ok(chunk)) = body.next().await {
+                        body_vec.extend_from_slice(&*chunk);
                     }
+
+                    let body_size = body_vec.len();
+
+                    inner_span1.record("http.request_content_length", &body_size);
+
+                    Ok((
+                        Response::from_parts(parts, Body::empty()),
+                        Some(body_vec),
+                        body_size,
+                    ))
                 }
                 Err(e) => Err(e),
             }
@@ -334,7 +315,6 @@ mod tests {
             let transaction = Transaction::new(
                 counter.clone(),
                 Request::get(url).body(Body::empty()).unwrap(),
-                false,
             );
             transaction.spawn_request(Arc::clone(&client), Duration::from_secs(2), Counter::new());
         }
