@@ -65,9 +65,9 @@ fn httpbin_transaction<D: Deliverable>(deliverable: D) -> Transaction<D> {
 
 fn check_successful_result(result: DeliveryResult) -> (bool, DeliveryResult) {
     let successful = match result {
-        DeliveryResult::Response { ref response, .. } => {
+        DeliveryResult::Response { ref parts, .. } => {
             // Onesignal is returning 302
-            response.status().is_success() || response.status().is_redirection()
+            parts.status.is_success() || parts.status.is_redirection()
         }
         _ => false,
     };
