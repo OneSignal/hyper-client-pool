@@ -4,7 +4,7 @@
 use std::{cmp, net::SocketAddr};
 
 use fpool::RoundRobinPool;
-use hyper::client::connect::dns::Name;
+use hyper_util::client::legacy::connect::dns::Name;
 use tower_service::Service;
 
 use crate::config::Config;
@@ -19,10 +19,10 @@ pub use self::builder::{
     ConnectorAdaptor, CreateResolver, DefaultConnectorAdapator, PoolBuilder, PoolConnector,
 };
 
-/// A pool of [`hyper::Client`]s.
+/// A pool of `hyper_util::client::legacy::Client`s.
 ///
-/// Manages a set of `hyper::Client` for maximizing throughput while presenting
-/// a `request` API similar to using a `hyper::Client` directly. The number of
+/// Manages a set of `hyper_util::client::legacy::Client` for maximizing throughput while presenting
+/// a `request` API similar to using a `hyper_util::client::legacy::Client` directly. The number of
 /// active transactions running on each client is tracked so that max_transactions_per_worker
 /// is respected. When all clients are full, backpressure is provided in the
 /// form of an Error variant saying "busy; try again later".

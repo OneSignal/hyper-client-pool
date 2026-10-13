@@ -2,12 +2,13 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures::prelude::*;
-use hyper::client::connect::Connect;
-use hyper::Body;
-use hyper::{self, client::Client, Request};
+use http_body_util::BodyExt;
+use hyper::{self, Request};
+use hyper_util::client::legacy::connect::Connect;
+use hyper_util::client::legacy::Client;
 
 use crate::deliverable::Deliverable;
+use crate::{Body, HyperClientPoolError};
 use raii_counter::Counter;
 use tracing::{span, trace, Instrument};
 
@@ -35,7 +36,7 @@ pub enum DeliveryResult {
 
     /// Sending a request through hyper encountered an error.
     HyperError {
-        error: hyper::Error,
+        error: HyperClientPoolError,
         duration: Duration,
     },
 }
@@ -113,7 +114,7 @@ impl<D: Deliverable> Transaction<D> {
 
     pub(crate) fn spawn_request<C: 'static + Connect + Clone + Send + Sync>(
         self,
-        client: Arc<Client<C>>,
+        client: Arc<Client<C, Body>>,
         timeout: Duration,
         counter: Counter,
     ) {
@@ -154,21 +155,24 @@ impl<D: Deliverable> Transaction<D> {
 
         let request_future = async move {
             trace!("Sending request");
-            match client.request(request).await {
-                Ok(response) => {
-                    let (parts, mut body) = response.into_parts();
-                    let mut body_vec = Vec::new();
 
-                    while let Some(Ok(chunk)) = body.next().await {
-                        body_vec.extend_from_slice(&*chunk);
-                    }
+            let response = match client.request(request).await {
+                Ok(response) => response,
+                Err(err) => return Err(Box::new(err) as HyperClientPoolError),
+            };
 
-                    inner_span1.record("http.request_content_length", body_vec.len());
+            let (parts, body) = response.into_parts();
 
-                    Ok((parts, body_vec))
-                }
-                Err(e) => Err(e),
-            }
+            let collected = match body.collect().await {
+                Ok(collected) => collected,
+                Err(err) => return Err(Box::new(err) as HyperClientPoolError),
+            };
+
+            let bytes = collected.to_bytes();
+
+            inner_span1.record("http.request_content_length", bytes.len());
+
+            Ok((parts, bytes.to_vec()))
         };
 
         tokio::spawn(
@@ -225,10 +229,11 @@ impl<D: Deliverable> Transaction<D> {
 mod tests {
     extern crate tracing_subscriber;
 
-    use hyper;
-    use hyper::client::connect::HttpConnector;
+    use bytes::Bytes;
     use hyper::Request;
     use hyper_tls::HttpsConnector;
+    use hyper_util::client::legacy::connect::HttpConnector;
+    use hyper_util::rt::TokioExecutor;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use tokio::time::sleep;
@@ -293,7 +298,7 @@ mod tests {
     const TRANSACTION_SPAWN_COUNT: usize = 200;
     const TIMEOUT_COUNT: usize = 50;
 
-    fn make_requests<C>(client: Client<C>, counter: &DeliveryCounter)
+    fn make_requests<C>(client: Client<C, Body>, counter: &DeliveryCounter)
     where
         C: 'static + Connect + Clone + Send + Sync,
     {
@@ -308,15 +313,15 @@ mod tests {
 
             let transaction = Transaction::new(
                 counter.clone(),
-                Request::get(url).body(Body::empty()).unwrap(),
+                Request::get(url).body(Body::new(Bytes::new())).unwrap(),
             );
             transaction.spawn_request(Arc::clone(&client), Duration::from_secs(2), Counter::new());
         }
     }
 
-    fn test_hyper_client() -> Client<HttpsConnector<HttpConnector>> {
+    fn test_hyper_client() -> Client<HttpsConnector<HttpConnector>, Body> {
         let connector = HttpsConnector::new();
-        Client::builder().build(connector)
+        Client::builder(TokioExecutor::new()).build(connector)
     }
 
     #[tokio::test]
