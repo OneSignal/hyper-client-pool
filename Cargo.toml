@@ -1,6 +1,6 @@
 [package]
 name = "hyper-client-pool"
-version = "0.7.0"
+version = "0.8.0"
 authors = ["Joe Wilm <joe@jwilm.com>"]
 description = "Pooled Hyper Async Clients"
 license = "MIT OR Apache-2.0"
@@ -26,6 +26,7 @@ fpool = "0.5"
 raii-counter = "0.1"
 tower-service = "0.3.0"
 tracing = "0.1"
+http = "0.2"
 
 [dev-dependencies]
 lazy_static = "1.0"

@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use futures::prelude::*;
 use hyper::client::connect::Connect;
+use hyper::Body;
 use hyper::{self, client::Client, Request};
-use hyper::{Body, Response};
 
 use crate::deliverable::Deliverable;
 use raii_counter::Counter;
@@ -23,9 +23,10 @@ pub enum DeliveryResult {
 
     /// Received a response from the external server.
     Response {
-        response: Response<Body>,
+        // Status Code, Headers, etc
+        parts: http::response::Parts,
+
         body: Vec<u8>,
-        body_size: usize,
         duration: Duration,
     },
 
@@ -162,15 +163,9 @@ impl<D: Deliverable> Transaction<D> {
                         body_vec.extend_from_slice(&*chunk);
                     }
 
-                    let body_size = body_vec.len();
+                    inner_span1.record("http.request_content_length", body_vec.len());
 
-                    inner_span1.record("http.request_content_length", &body_size);
-
-                    Ok((
-                        Response::from_parts(parts, Body::empty()),
-                        body_vec,
-                        body_size,
-                    ))
+                    Ok((parts, body_vec))
                 }
                 Err(e) => Err(e),
             }
@@ -182,14 +177,13 @@ impl<D: Deliverable> Transaction<D> {
                 let duration = start_time.elapsed();
 
                 let delivery_result = match result {
-                    Ok(Ok((response, body, body_size))) => {
-                        inner_span2.record("http.status_code", &response.status().as_u16());
+                    Ok(Ok((parts, body))) => {
+                        inner_span2.record("http.status_code", &parts.status.as_u16());
                         inner_span2.record("outcome", &"http success");
-                        trace!(?response, ?duration, "Finished transaction",);
+                        trace!(?parts, ?duration, "Finished transaction",);
                         DeliveryResult::Response {
-                            response,
+                            parts,
                             body,
-                            body_size,
                             duration,
                         }
                     }
